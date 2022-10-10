@@ -1,6 +1,10 @@
 import torch
+from kornia.color import rgb_to_yuv
 from torch import nn
 import vren
+from einops import rearrange
+
+from misc.rgb_lab_formulation_pytorch import rgb_to_lab
 
 
 class DistortionLoss(torch.autograd.Function):
@@ -19,6 +23,7 @@ class DistortionLoss(torch.autograd.Function):
     Outputs:
         loss: (N_rays)
     """
+
     @staticmethod
     def forward(ctx, ws, deltas, ts, rays_a):
         loss, ws_inclusive_scan, wts_inclusive_scan = \
@@ -30,7 +35,7 @@ class DistortionLoss(torch.autograd.Function):
     @staticmethod
     def backward(ctx, dL_dloss):
         (ws_inclusive_scan, wts_inclusive_scan,
-        ws, deltas, ts, rays_a) = ctx.saved_tensors
+         ws, deltas, ts, rays_a) = ctx.saved_tensors
         dL_dws = vren.distortion_loss_bw(dL_dloss, ws_inclusive_scan,
                                          wts_inclusive_scan,
                                          ws, deltas, ts, rays_a)
@@ -46,15 +51,23 @@ class NeRFLoss(nn.Module):
 
     def forward(self, results, target, **kwargs):
         d = {}
-        d['rgb'] = (results['rgb'] - target['rgb']) ** 2
-
+        target_yuv = rgb_to_yuv(rearrange(target['rgb'], 'b c -> b c 1 1'))[..., 0, 0]
+        results_yuv = rgb_to_yuv(rearrange(results['rgb'], 'b c -> b c 1 1'))[..., 0, 0]
+        d['rgb'] = (results_yuv - target_yuv) ** 2
+        # d['rgb'] = (results_yuv[0] - target_yuv[0]) ** 2 + \
+        #            0.1 * (results_yuv[1] - target_yuv[1]) ** 2 + \
+        #            0.1 * (results_yuv[2] - target_yuv[2]) ** 2
+        # d['rgb'] = (results['rgb'] - target['rgb']) ** 2
+        d['rgb'][..., 0] *= 3
+        d['rgb'][..., 1:] *= 1e-8
+        d['rgb'][..., 1:] += results_yuv[..., 1:] * 1e-2
         o = results['opacity'] + 1e-10
         # encourage opacity to be either 0 or 1 to avoid floater
-        d['opacity'] = self.lambda_opacity*(-o*torch.log(o))
+        d['opacity'] = self.lambda_opacity * (-o * torch.log(o))
 
         if self.lambda_distortion > 0:
             d['distortion'] = self.lambda_distortion * \
-                DistortionLoss.apply(results['ws'], results['deltas'],
-                                     results['ts'], results['rays_a'])
+                              DistortionLoss.apply(results['ws'], results['deltas'],
+                                                   results['ts'], results['rays_a'])
 
         return d

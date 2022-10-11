@@ -51,23 +51,28 @@ class NeRFLoss(nn.Module):
         self.lambda_distortion = lambda_distortion
         self._hist_u = GaussianHistogram(bins=100, min=-0.436, max=0.436, sigma=1e-2)
         self._hist_v = GaussianHistogram(bins=100, min=-0.615, max=0.615, sigma=1e-2)
+        self._loss_u = torch.nn.KLDivLoss()
+        self._loss_v = torch.nn.KLDivLoss()
 
     def _yuv_loss(self, target_yuv, results_yuv):
         ty, tu, tv = target_yuv[:, 0], target_yuv[:, 1], target_yuv[:, 2]
         ry, ru, rv = results_yuv[:, 0], results_yuv[:, 1], results_yuv[:, 2]
-        dy = (ty - ry) ** 2
-        du = (tu - ru) ** 2 * 1e-8 # + tu * 1e-2
-        dv = (tv - rv) ** 2 * 1e-8 # + tv * 1e-2
+        dy = (ty - ry) ** 2 * 3
+        du = (tu - ru) ** 2 * 1e-3  # + tu * 1e-2
+        dv = (tv - rv) ** 2 * 1e-3  # + tv * 1e-2
 
         thu, thv = self._hist_u(tu), self._hist_v(tv)
         rhu, rhv = self._hist_u(ru), self._hist_v(rv)
 
-        return torch.stack((dy, du, dv), dim=-1)
+        dhu = self._loss_u(rhu, thu) * 1e-5
+        dhv = self._loss_v(rhv, thv) * 1e-5
+
+        return torch.stack((dy, du, dv), dim=-1), torch.stack((dhu, dhv), dim=-1)
 
     def forward(self, results, target, **kwargs):
         d = {}
 
-        d['rgb'] = self._yuv_loss(
+        d['rgb'], d['hist'] = self._yuv_loss(
             target_yuv=rearrange(rgb_to_yuv(rearrange(target['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c'),
             results_yuv=rearrange(rgb_to_yuv(rearrange(results['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c'))
 

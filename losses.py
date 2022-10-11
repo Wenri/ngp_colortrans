@@ -4,6 +4,7 @@ from torch import nn
 import vren
 from einops import rearrange
 
+from misc.differentiable_histogram import GaussianHistogram
 from misc.rgb_lab_formulation_pytorch import rgb_to_lab
 
 
@@ -48,19 +49,28 @@ class NeRFLoss(nn.Module):
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
+        self._hist_u = GaussianHistogram(bins=100, min=-0.436, max=0.436, sigma=1e-2)
+        self._hist_v = GaussianHistogram(bins=100, min=-0.615, max=0.615, sigma=1e-2)
+
+    def _yuv_loss(self, target_yuv, results_yuv):
+        ty, tu, tv = target_yuv[:, 0], target_yuv[:, 1], target_yuv[:, 2]
+        ry, ru, rv = results_yuv[:, 0], results_yuv[:, 1], results_yuv[:, 2]
+        dy = (ty - ry) ** 2
+        du = (tu - ru) ** 2 * 1e-8 # + tu * 1e-2
+        dv = (tv - rv) ** 2 * 1e-8 # + tv * 1e-2
+
+        thu, thv = self._hist_u(tu), self._hist_v(tv)
+        rhu, rhv = self._hist_u(ru), self._hist_v(rv)
+
+        return torch.stack((dy, du, dv), dim=-1)
 
     def forward(self, results, target, **kwargs):
         d = {}
-        target_yuv = rgb_to_yuv(rearrange(target['rgb'], 'b c -> b c 1 1'))[..., 0, 0]
-        results_yuv = rgb_to_yuv(rearrange(results['rgb'], 'b c -> b c 1 1'))[..., 0, 0]
-        d['rgb'] = (results_yuv - target_yuv) ** 2
-        # d['rgb'] = (results_yuv[0] - target_yuv[0]) ** 2 + \
-        #            0.1 * (results_yuv[1] - target_yuv[1]) ** 2 + \
-        #            0.1 * (results_yuv[2] - target_yuv[2]) ** 2
-        # d['rgb'] = (results['rgb'] - target['rgb']) ** 2
-        d['rgb'][..., 0] *= 3
-        d['rgb'][..., 1:] *= 1e-8
-        d['rgb'][..., 1:] += results_yuv[..., 1:] * 1e-2
+
+        d['rgb'] = self._yuv_loss(
+            target_yuv=rearrange(rgb_to_yuv(rearrange(target['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c'),
+            results_yuv=rearrange(rgb_to_yuv(rearrange(results['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c'))
+
         o = results['opacity'] + 1e-10
         # encourage opacity to be either 0 or 1 to avoid floater
         d['opacity'] = self.lambda_opacity * (-o * torch.log(o))

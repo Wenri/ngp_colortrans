@@ -66,7 +66,7 @@ class MultivariateGaussianHistogram(nn.Module):
         k *= torch.prod(self.sigma).item()
         self._norm_factor = delta ** len(self.sigma) / k
         centers = delta * (torch.arange(bins, dtype=torch.float) + 0.5) + min
-        centers = torch.stack((centers, centers), dim=-1)
+        centers = torch.cartesian_prod(centers, centers)
         self.register_buffer('centers', centers, persistent=False)
 
     def forward(self, x: torch.Tensor):
@@ -81,11 +81,11 @@ def _testhist():
     if sys.gettrace() is None:
         torch.set_printoptions(precision=0, sci_mode=False)
 
-    data = torch.randn(1000) / 3
+    # data = torch.randn(1000) / 3
 
-    print('histc GaussianHistogram SoftHistogram')
-    hist = torch.histc(data, bins=100, min=-1, max=1)
-    print(hist)
+    # print('histc GaussianHistogram SoftHistogram')
+    # hist = torch.histogram(data, bins=100, range=(-1., 1.))
+    # print(hist)
 
     # gausshist = GaussianHistogram(bins=100, min=-1, max=1, sigma=1e-2)
     # hist = gausshist(data)
@@ -96,7 +96,12 @@ def _testhist():
     # print(hist)
 
     data = torch.randn(100000, 2) / 3
-    mghist = MultivariateGaussianHistogram(bins=100, min=-1, max=1, sigma=(1e-2, 1e-2))
+
+    print('histogramdd GaussianHistogram')
+    hist, bin_edges = torch.histogramdd(data, bins=10, range=(-1., 1., -1., 1.))
+    print(hist)
+
+    mghist = MultivariateGaussianHistogram(bins=10, min=-1, max=1, sigma=(1e-2, 1e-2))
     hist = mghist(data)
     print(hist)
 

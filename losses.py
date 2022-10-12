@@ -4,7 +4,7 @@ from torch import nn
 import vren
 from einops import rearrange
 
-from misc.differentiable_histogram import GaussianHistogram
+from misc.differentiable_histogram import GaussianHistogram, MultivariateGaussianHistogram
 from misc.rgb_lab_formulation_pytorch import rgb_to_lab
 
 
@@ -49,10 +49,9 @@ class NeRFLoss(nn.Module):
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
-        self._hist_u = GaussianHistogram(bins=100, min=-0.436, max=0.436, sigma=1e-2)
-        self._hist_v = GaussianHistogram(bins=100, min=-0.615, max=0.615, sigma=1e-2)
-        self._loss_u = torch.nn.KLDivLoss()
-        self._loss_v = torch.nn.KLDivLoss()
+        # self._hist_func = GaussianHistogram(bins=100, min=-0.436, max=0.436, sigma=1e-2)
+        self._hist_func = MultivariateGaussianHistogram(bins=64, min=-0.615, max=0.615, sigma=(1e-2, 1e-2))
+        self._hist_loss = torch.nn.KLDivLoss()
 
     def _yuv_loss(self, target_yuv, results_yuv):
         ty, tu, tv = target_yuv[:, 0], target_yuv[:, 1], target_yuv[:, 2]
@@ -61,13 +60,10 @@ class NeRFLoss(nn.Module):
         du = (tu - ru) ** 2 * 1e-3  # + tu * 1e-2
         dv = (tv - rv) ** 2 * 1e-3  # + tv * 1e-2
 
-        thu, thv = self._hist_u(tu), self._hist_v(tv)
-        rhu, rhv = self._hist_u(ru), self._hist_v(rv)
+        thuv, rhuv = self._hist_func(torch.stack([tu, tv], dim=-1)), self._hist_func(torch.stack([ru, rv], dim=-1))
+        dhuv = self._hist_loss(rhuv, thuv) * 1e-5
 
-        dhu = self._loss_u(rhu, thu) * 1e-5
-        dhv = self._loss_v(rhv, thv) * 1e-5
-
-        return torch.stack((dy, du, dv), dim=-1), torch.stack((dhu, dhv), dim=-1)
+        return torch.stack((dy, du, dv), dim=-1), dhuv
 
     def forward(self, results, target, **kwargs):
         d = {}

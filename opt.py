@@ -32,10 +32,11 @@ def get_opts():
     parser.add_argument('--batch_size', type=int, default=8192,
                         help='number of rays in a batch')
     parser.add_argument('--ray_sampling_strategy', type=str, default='all_images',
-                        choices=['all_images', 'same_image'],
+                        choices=['all_images', 'same_image', 'deferred_images'],
                         help='''
                         all_images: uniformly from all pixels of ALL images
                         same_image: uniformly from all pixels of a SAME image
+                        deferred_images: hidden mode for color transfer
                         ''')
     parser.add_argument('--num_epochs', type=int, default=30,
                         help='number of training epochs')

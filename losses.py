@@ -1,5 +1,5 @@
 import torch
-from kornia.color import rgb_to_yuv
+from kornia.color import rgb_to_yuv, rgb_to_yuv420
 from torch import nn
 import vren
 from einops import rearrange
@@ -43,38 +43,51 @@ class DistortionLoss(torch.autograd.Function):
         return dL_dws, None, None, None
 
 
+class HistLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # self._hist_func = GaussianHistogram(bins=100, min=-0.436, max=0.436, sigma=1e-2)
+        self._hist_func = MultivariateGaussianHistogram(bins=32, min=-0.615, max=0.615, sigma=(1e-2, 1e-2))
+        self._hist_loss = torch.nn.KLDivLoss()
+
+    def forward(self, results, target, **kwargs):
+        ty, tuv = rgb_to_yuv420(target)
+        ry, ruv = rgb_to_yuv420(results)
+
+        tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')
+        thuv, rhuv = self._hist_func(tuv), self._hist_func(ruv)
+        dhuv = self._hist_loss(rhuv, thuv) * 1e-2
+
+        return dhuv
+
+
 class NeRFLoss(nn.Module):
     def __init__(self, lambda_opacity=1e-3, lambda_distortion=1e-3):
         super().__init__()
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
-        # self._hist_func = GaussianHistogram(bins=100, min=-0.436, max=0.436, sigma=1e-2)
-        self._hist_func = MultivariateGaussianHistogram(bins=64, min=-0.615, max=0.615, sigma=(1e-2, 1e-2))
-        self._hist_loss = torch.nn.KLDivLoss()
 
     def _yuv_loss(self, target_yuv, results_yuv):
         ty, tu, tv = target_yuv[:, 0], target_yuv[:, 1], target_yuv[:, 2]
         ry, ru, rv = results_yuv[:, 0], results_yuv[:, 1], results_yuv[:, 2]
-        dy = (ty - ry) ** 2 * 3
-        du = (tu - ru) ** 2 * 1e-3  # + tu * 1e-2
-        dv = (tv - rv) ** 2 * 1e-3  # + tv * 1e-2
+        dy = (ty - ry) ** 2 * 2
+        du = (tu - ru) ** 2 * 1e-1  # + tu * 1e-2
+        dv = (tv - rv) ** 2 * 1e-1  # + tv * 1e-2
 
-        thuv, rhuv = self._hist_func(torch.stack([tu, tv], dim=-1)), self._hist_func(torch.stack([ru, rv], dim=-1))
-        dhuv = self._hist_loss(rhuv, thuv) * 1e-5
-
-        return torch.stack((dy, du, dv), dim=-1), dhuv
+        return torch.stack((dy, du, dv), dim=-1)
 
     def forward(self, results, target, **kwargs):
-        d = {}
-
-        d['rgb'], d['hist'] = self._yuv_loss(
-            target_yuv=rearrange(rgb_to_yuv(rearrange(target['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c'),
-            results_yuv=rearrange(rgb_to_yuv(rearrange(results['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c'))
-
         o = results['opacity'] + 1e-10
-        # encourage opacity to be either 0 or 1 to avoid floater
-        d['opacity'] = self.lambda_opacity * (-o * torch.log(o))
+
+        d = {
+            'rgb': self._yuv_loss(
+                target_yuv=rearrange(rgb_to_yuv(rearrange(target['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c'),
+                results_yuv=rearrange(rgb_to_yuv(rearrange(results['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c')),
+
+            # encourage opacity to be either 0 or 1 to avoid floater
+            'opacity': self.lambda_opacity * (-o * torch.log(o)),
+        }
 
         if self.lambda_distortion > 0:
             d['distortion'] = self.lambda_distortion * \

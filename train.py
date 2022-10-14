@@ -23,7 +23,7 @@ from models.rendering import render, MAX_SAMPLES
 # optimizer, losses
 from apex.optimizers import FusedAdam
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from losses import NeRFLoss
+from losses import NeRFLoss, HistLoss
 
 # metrics
 from torchmetrics import (
@@ -63,6 +63,7 @@ class NeRFSystem(LightningModule):
         self.update_interval = 16
 
         self.loss = NeRFLoss(lambda_distortion=self.hparams.distortion_loss_w)
+        self.deferred_loss = HistLoss()
         self.train_psnr = PeakSignalNoiseRatio(data_range=1)
         self.val_psnr = PeakSignalNoiseRatio(data_range=1)
         self.val_ssim = StructuralSimilarityIndexMeasure(data_range=1)
@@ -154,11 +155,24 @@ class NeRFSystem(LightningModule):
     def on_train_start(self):
         self.model.mark_invisible_cells(self.train_dataset.K.to(self.device), self.poses, self.train_dataset.img_wh)
 
+    def deferred_step(self, img, **kwargs):
+        img = rearrange(img, 'h w c -> 1 c h w')
+        kwargs['pose'] = self.poses[kwargs['img_idxs']]
+        # with torch.no_grad():
+        results = self(kwargs, split='deferred')
+        pred_img = rearrange(results['rgb'], '(h w) c -> 1 c h w', w=img.shape[-1])
+        # pred_img.requires_grad_(True)
+        loss = self.deferred_loss(pred_img, img)
+        return loss
+
     def training_step(self, batch, batch_nb, *args):
         if self.global_step % self.update_interval == 0:
             self.model.update_density_grid(0.01 * MAX_SAMPLES / 3 ** 0.5,
                                            self.global_step < self.warmup_steps,
                                            erode=False)  # self.hparams.dataset_name == 'colmap')
+        loss = 0.
+        if 'img' in batch:
+            loss += self.deferred_step(**batch).mean() * 1e-5
 
         results = self(batch, split='train')
         loss_d = self.loss(results, batch)
@@ -168,7 +182,7 @@ class NeRFSystem(LightningModule):
                                                                **{'exposure': torch.ones(1, 1, device=self.device)})
             loss_d['unit_exposure'] = \
                 0.5 * (unit_exposure_rgb - self.train_dataset.unit_exposure_rgb) ** 2
-        loss = sum(lo.mean() for lo in loss_d.values())
+        loss += sum(lo.mean() for lo in loss_d.values())
 
         with torch.no_grad():
             self.train_psnr(results['rgb'], batch['rgb'])

@@ -1,5 +1,6 @@
 import torch
 from kornia.color import rgb_to_yuv, rgb_to_yuv420
+from kornia.filters import spatial_gradient
 from torch import nn
 import vren
 from einops import rearrange
@@ -54,10 +55,14 @@ class HistLoss(nn.Module):
         ty, tuv = rgb_to_yuv420(target)
         ry, ruv = rgb_to_yuv420(results)
 
+        dhuv = (tuv.mean() - ruv.mean()) ** 2 * 1e-1
+        sptuv, spruv = spatial_gradient(tuv, normalized=False), spatial_gradient(ruv, normalized=False)
+
         tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')
         thuv, rhuv = self._hist_func(tuv), self._hist_func(ruv)
-        dhuv = self._hist_loss(rhuv, thuv) * 1e-2
+        dhuv += self._hist_loss(rhuv, thuv) * 1e-1
 
+        dhuv += torch.mean((sptuv - spruv) ** 2) * 1e-1
         return dhuv
 
 
@@ -72,8 +77,8 @@ class NeRFLoss(nn.Module):
         ty, tu, tv = target_yuv[:, 0], target_yuv[:, 1], target_yuv[:, 2]
         ry, ru, rv = results_yuv[:, 0], results_yuv[:, 1], results_yuv[:, 2]
         dy = (ty - ry) ** 2 * 2
-        du = (tu - ru) ** 2 * 1e-1  # + tu * 1e-2
-        dv = (tv - rv) ** 2 * 1e-1  # + tv * 1e-2
+        du = (tu - ru) ** 2 * 1e-3  # + tu * 1e-2
+        dv = (tv - rv) ** 2 * 1e-3  # + tv * 1e-2
 
         return torch.stack((dy, du, dv), dim=-1)
 

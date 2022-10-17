@@ -51,18 +51,19 @@ class HistLoss(nn.Module):
         self._hist_func = MultivariateGaussianHistogram(bins=32, min=-0.615, max=0.615, sigma=(1e-2, 1e-2))
         self._hist_loss = torch.nn.KLDivLoss()
 
-    def forward(self, results, target, **kwargs):
-        ty, tuv = rgb_to_yuv420(target)
-        ry, ruv = rgb_to_yuv420(results)
+    def forward(self, target, results, **kwargs):
+        tuv, ruv = target[..., 1:3], results[..., 1:3]
+        dhuv = (tuv.mean() - ruv.mean()) ** 2 * 1e-5
 
-        dhuv = (tuv.mean() - ruv.mean()) ** 2 * 1e-1
         sptuv, spruv = spatial_gradient(tuv, normalized=False), spatial_gradient(ruv, normalized=False)
+        spmask = torch.all(torch.lt(spruv.abs(), 0.5), dim=2, keepdim=True).expand_as(spruv)
+        dhuv += torch.mean((sptuv[spmask] - spruv[spmask]) ** 2)
 
-        tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')
-        thuv, rhuv = self._hist_func(tuv), self._hist_func(ruv)
-        dhuv += self._hist_loss(rhuv, thuv) * 1e-1
+        # tuv, ruv = torch.nn.functional.avg_pool2d(tuv, (2, 2)), torch.nn.functional.avg_pool2d(ruv, (2, 2))
+        # tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')
+        # thuv, rhuv = self._hist_func(tuv), self._hist_func(ruv)
+        # dhuv += self._hist_loss(rhuv, thuv) * 1e-1
 
-        dhuv += torch.mean((sptuv - spruv) ** 2) * 1e-1
         return dhuv
 
 
@@ -74,22 +75,18 @@ class NeRFLoss(nn.Module):
         self.lambda_distortion = lambda_distortion
 
     def _yuv_loss(self, target_yuv, results_yuv):
-        ty, tu, tv = target_yuv[:, 0], target_yuv[:, 1], target_yuv[:, 2]
-        ry, ru, rv = results_yuv[:, 0], results_yuv[:, 1], results_yuv[:, 2]
-        dy = (ty - ry) ** 2 * 2
-        du = (tu - ru) ** 2 * 1e-3  # + tu * 1e-2
-        dv = (tv - rv) ** 2 * 1e-3  # + tv * 1e-2
+        ty, tuv = target_yuv[..., 0], target_yuv[..., 1:3]
+        ry, ruv = results_yuv[..., 0], results_yuv[..., 1:3]
+        dy = (ty - ry) ** 2 * 1e-1
+        duv = (tuv - ruv) ** 2 * 1e-3
 
-        return torch.stack((dy, du, dv), dim=-1)
+        return torch.cat((dy.unsqueeze(-1), duv), dim=-1)
 
     def forward(self, results, target, **kwargs):
         o = results['opacity'] + 1e-10
 
         d = {
-            'rgb': self._yuv_loss(
-                target_yuv=rearrange(rgb_to_yuv(rearrange(target['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c'),
-                results_yuv=rearrange(rgb_to_yuv(rearrange(results['rgb'], 'b c -> b c 1 1')), 'b c 1 1 -> b c')),
-
+            'rgb': self._yuv_loss(target_yuv=target['rgb'], results_yuv=results['rgb']),
             # encourage opacity to be either 0 or 1 to avoid floater
             'opacity': self.lambda_opacity * (-o * torch.log(o)),
         }

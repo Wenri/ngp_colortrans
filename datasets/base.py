@@ -1,3 +1,4 @@
+from collections import namedtuple
 from einops import rearrange
 from torch.utils.data import Dataset
 import numpy as np
@@ -7,6 +8,7 @@ class BaseDataset(Dataset):
     """
     Define length and sampling method
     """
+    IMAGE_SIZE = namedtuple('IMAGE_SIZE', ['w', 'h'])
 
     def __init__(self, root_dir, split='train', downsample=1.0):
         self.root_dir = root_dir

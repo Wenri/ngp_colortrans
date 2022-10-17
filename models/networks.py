@@ -203,7 +203,7 @@ class NGP(NGPBase):
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
-                    "output_activation": self.rgb_act,
+                    "output_activation": str(self.rgb_act),
                     "n_neurons": 64,
                     "n_hidden_layers": 2,
                 }
@@ -278,7 +278,11 @@ class NGP(NGPBase):
         d = self.dir_encoder((d + 1) / 2)
         rgbs = self.rgb_net(torch.cat([d, h], 1))
 
-        if self.rgb_act == 'None':  # rgbs is log-radiance
+        if self.rgb_act is None:
+            ry, ruv = rgbs[..., 0], rgbs[..., 1:3]
+            ry, ruv = torch.sigmoid(ry), torch.tanh(ruv)
+            rgbs = torch.cat((ry.unsqueeze(-1), ruv), -1)
+        elif self.rgb_act == 'None':  # rgbs is log-radiance
             if kwargs.get('output_radiance', False):  # output HDR map
                 rgbs = TruncExp.apply(rgbs)
             else:  # convert to LDR using tonemapper networks

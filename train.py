@@ -1,6 +1,7 @@
 from typing import Optional
 
 import torch
+from kornia.color import yuv_to_rgb
 from torch import nn
 from opt import get_opts
 import os
@@ -57,6 +58,8 @@ def depth2img(depth):
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
         super().__init__()
+        self.val_dir = f'results/{hparams.dataset_name}/{hparams.exp_name}/init'
+        os.makedirs(self.val_dir, exist_ok=True)
         self.save_hyperparameters(hparams)
 
         self.warmup_steps = 256
@@ -72,7 +75,7 @@ class NeRFSystem(LightningModule):
             for p in self.val_lpips.net.parameters():
                 p.requires_grad = False
 
-        rgb_act = 'None' if self.hparams.use_exposure else 'Sigmoid'
+        rgb_act = 'None' if self.hparams.use_exposure else None
         self.model = NGP(scale=self.hparams.scale, rgb_act=rgb_act)
         # self.model = NeRF(scale=self.hparams.scale, rgb_act=rgb_act)
 
@@ -155,14 +158,19 @@ class NeRFSystem(LightningModule):
     def on_train_start(self):
         self.model.mark_invisible_cells(self.train_dataset.K.to(self.device), self.poses, self.train_dataset.img_wh)
 
-    def deferred_step(self, img, **kwargs):
-        img = rearrange(img, 'h w c -> 1 c h w')
+    def deferred_step(self, img, b_save, **kwargs):
         kwargs['pose'] = self.poses[kwargs['img_idxs']]
         # with torch.no_grad():
         results = self(kwargs, split='deferred')
-        pred_img = rearrange(results['rgb'], '(h w) c -> 1 c h w', w=img.shape[-1])
+        pred_img = results['rgb']
+        if b_save:
+            self.save_image(pred_img, f'deferred_pred.png')
+            self.save_image(rearrange(img, 'h w c -> (h w) c'), f'deferred_gt.png')
+
+        pred_img = rearrange(pred_img, '(h w) c -> 1 h w c', h=img.shape[0])
+
         # pred_img.requires_grad_(True)
-        loss = self.deferred_loss(pred_img, img)
+        loss = self.deferred_loss(rearrange(img, 'h w c -> 1 h w c'), results=pred_img)
         return loss
 
     def training_step(self, batch, batch_nb, *args):
@@ -172,7 +180,7 @@ class NeRFSystem(LightningModule):
                                            erode=False)  # self.hparams.dataset_name == 'colmap')
         loss = 0.
         if 'img' in batch:
-            loss += self.deferred_step(**batch).mean() * 1e-5
+            loss += self.deferred_step(**batch, b_save=batch_nb == 0).mean() * 1e-5
 
         results = self(batch, split='train')
         loss_d = self.loss(results, batch)
@@ -199,7 +207,7 @@ class NeRFSystem(LightningModule):
     def on_validation_start(self):
         torch.cuda.empty_cache()
         if not self.hparams.no_save_test:
-            self.val_dir = f'results/{self.hparams.dataset_name}/{self.hparams.exp_name}'
+            self.val_dir = f'results/{self.hparams.dataset_name}/{self.hparams.exp_name}/{self.current_epoch}'
             os.makedirs(self.val_dir, exist_ok=True)
 
     def validation_step(self, batch, batch_nb):
@@ -213,8 +221,8 @@ class NeRFSystem(LightningModule):
         self.val_psnr.reset()
 
         w, h = self.train_dataset.img_wh
-        rgb_pred = rearrange(results['rgb'], '(h w) c -> 1 c h w', h=h)
-        rgb_gt = rearrange(rgb_gt, '(h w) c -> 1 c h w', h=h)
+        rgb_pred = yuv_to_rgb(rearrange(results['rgb'], '(h w) c -> 1 c h w', h=h))
+        rgb_gt = yuv_to_rgb(rearrange(rgb_gt, '(h w) c -> 1 c h w', h=h))
         self.val_ssim(rgb_pred, rgb_gt)
         logs['ssim'] = self.val_ssim.compute()
         self.val_ssim.reset()
@@ -226,11 +234,8 @@ class NeRFSystem(LightningModule):
 
         if not self.hparams.no_save_test:  # save test image to disk
             idx = batch['img_idxs']
-            rgb_pred = rearrange(results['rgb'].cpu().numpy(), '(h w) c -> h w c', h=h)
-            rgb_pred = (rgb_pred * 255).astype(np.uint8)
-            depth = depth2img(rearrange(results['depth'].cpu().numpy(), '(h w) -> h w', h=h))
-            imageio.imsave(os.path.join(self.val_dir, f'{idx:03d}.png'), rgb_pred)
-            imageio.imsave(os.path.join(self.val_dir, f'{idx:03d}_d.png'), depth)
+            self.save_image(results['rgb'], f'{idx:03d}.png')
+            self.save_depth(results['depth'], f'{idx:03d}_d.png')
 
         return logs
 
@@ -254,6 +259,18 @@ class NeRFSystem(LightningModule):
         items.pop("v_num", None)
         return items
 
+    def save_image(self, rays, name):
+        w, h = self.train_dataset.img_wh
+        rgb_pred = rearrange(rays, '(h w) c -> 1 c h w', h=h)
+        rgb_pred = rearrange(yuv_to_rgb(rgb_pred).squeeze(0), 'c h w -> h w c')
+        rgb_pred = torch.clamp(rgb_pred * 255, min=0, max=255).cpu().numpy().astype(np.uint8)
+        imageio.imsave(os.path.join(self.val_dir, name), rgb_pred)
+
+    def save_depth(self, depth, name):
+        w, h = self.train_dataset.img_wh
+        depth = depth2img(rearrange(depth.cpu().numpy(), '(h w) -> h w', h=h))
+        imageio.imsave(os.path.join(self.val_dir, name), depth)
+
 
 def main(hparams):
     if hparams.val_only and (not hparams.ckpt_path):
@@ -273,7 +290,7 @@ def main(hparams):
                                default_hp_metric=False)
 
     trainer = Trainer(max_epochs=hparams.num_epochs,
-                      check_val_every_n_epoch=hparams.num_epochs,
+                      # check_val_every_n_epoch=hparams.num_epochs,
                       callbacks=callbacks,
                       logger=logger,
                       enable_model_summary=False,

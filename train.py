@@ -170,9 +170,9 @@ class NeRFSystem(LightningModule):
             self.model.update_density_grid(0.01 * MAX_SAMPLES / 3 ** 0.5,
                                            self.global_step < self.warmup_steps,
                                            erode=False)  # self.hparams.dataset_name == 'colmap')
-        loss = 0.
-        if 'img' in batch:
-            loss += self.deferred_step(**batch).mean() * 1e-5
+        # loss = 0.
+        # if 'img' in batch:
+        #     loss += self.deferred_step(**batch).mean() * 1e-5
 
         results = self(batch, split='train')
         loss_d = self.loss(results, batch)
@@ -182,7 +182,7 @@ class NeRFSystem(LightningModule):
                                                                **{'exposure': torch.ones(1, 1, device=self.device)})
             loss_d['unit_exposure'] = \
                 0.5 * (unit_exposure_rgb - self.train_dataset.unit_exposure_rgb) ** 2
-        loss += sum(lo.mean() for lo in loss_d.values())
+        loss = sum(lo.mean() for lo in loss_d.values())
 
         with torch.no_grad():
             self.train_psnr(results['rgb'], batch['rgb'])

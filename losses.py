@@ -76,9 +76,9 @@ class NeRFLoss(nn.Module):
     def _yuv_loss(self, target_yuv, results_yuv):
         ty, tu, tv = target_yuv[:, 0], target_yuv[:, 1], target_yuv[:, 2]
         ry, ru, rv = results_yuv[:, 0], results_yuv[:, 1], results_yuv[:, 2]
-        dy = (ty - ry) ** 2 * 2
-        du = (tu - ru) ** 2 * 1e-3  # + tu * 1e-2
-        dv = (tv - rv) ** 2 * 1e-3  # + tv * 1e-2
+        dy = (ty - ry) ** 2
+        du = (tu - ru) ** 2
+        dv = (tv - rv) ** 2
 
         return torch.stack((dy, du, dv), dim=-1)
 

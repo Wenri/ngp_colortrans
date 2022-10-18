@@ -1,7 +1,7 @@
 from typing import Optional
 
 import torch
-from kornia.color import yuv_to_rgb
+from kornia.color import xyz_to_rgb, linear_rgb_to_rgb
 from torch import nn
 from opt import get_opts
 import os
@@ -75,7 +75,7 @@ class NeRFSystem(LightningModule):
             for p in self.val_lpips.net.parameters():
                 p.requires_grad = False
 
-        rgb_act = 'None' if self.hparams.use_exposure else None
+        rgb_act = 'None' if self.hparams.use_exposure else 'Sigmoid'
         self.model = NGP(scale=self.hparams.scale, rgb_act=rgb_act)
         # self.model = NeRF(scale=self.hparams.scale, rgb_act=rgb_act)
 
@@ -158,19 +158,24 @@ class NeRFSystem(LightningModule):
     def on_train_start(self):
         self.model.mark_invisible_cells(self.train_dataset.K.to(self.device), self.poses, self.train_dataset.img_wh)
 
-    def deferred_step(self, img, b_save, **kwargs):
+    def deferred_step(self, img, pix_idxs, rays, b_save, **kwargs):
+        w, h = self.train_dataset.img_wh
         kwargs['pose'] = self.poses[kwargs['img_idxs']]
-        # with torch.no_grad():
-        results = self(kwargs, split='deferred')
+        with torch.no_grad():
+            results = self(kwargs, split='deferred')
         pred_img = results['rgb']
-        if b_save:
+
+        is_finite = torch.all(torch.isfinite(pred_img))
+        if b_save or not is_finite:
             self.save_image(pred_img, f'deferred_pred.png')
             self.save_image(rearrange(img, 'h w c -> (h w) c'), f'deferred_gt.png')
+            assert is_finite
 
-        pred_img = rearrange(pred_img, '(h w) c -> 1 h w c', h=img.shape[0])
+        pred_img.scatter_(dim=0, index=pix_idxs.unsqueeze(-1).expand_as(rays), src=rays)
+        pred_img = rearrange(pred_img, '(h w) c -> 1 h w c', h=h)
 
-        # pred_img.requires_grad_(True)
-        loss = self.deferred_loss(rearrange(img, 'h w c -> 1 h w c'), results=pred_img)
+        loss = self.deferred_loss(results=pred_img, target=rearrange(img, 'h w c -> 1 h w c'))
+
         return loss
 
     def training_step(self, batch, batch_nb, *args):
@@ -178,19 +183,20 @@ class NeRFSystem(LightningModule):
             self.model.update_density_grid(0.01 * MAX_SAMPLES / 3 ** 0.5,
                                            self.global_step < self.warmup_steps,
                                            erode=False)  # self.hparams.dataset_name == 'colmap')
-        loss = 0.
-        if 'img' in batch:
-            loss += self.deferred_step(**batch, b_save=batch_nb == 0).mean() * 1e-5
 
         results = self(batch, split='train')
-        loss_d = self.loss(results, batch)
+        loss_d = self.loss(results=results, target=batch)
         if self.hparams.use_exposure:
             zero_radiance = torch.zeros(1, 3, device=self.device)
             unit_exposure_rgb = self.model.log_radiance_to_rgb(zero_radiance,
                                                                **{'exposure': torch.ones(1, 1, device=self.device)})
             loss_d['unit_exposure'] = \
                 0.5 * (unit_exposure_rgb - self.train_dataset.unit_exposure_rgb) ** 2
-        loss += sum(lo.mean() for lo in loss_d.values())
+
+        # if 'img' in batch:
+        #     loss_d['img'] = self.deferred_step(**batch, rays=results['rgb'], b_save=batch_nb == 0)
+
+        loss = sum(lo.mean() for lo in loss_d.values())
 
         with torch.no_grad():
             self.train_psnr(results['rgb'], batch['rgb'])
@@ -221,8 +227,8 @@ class NeRFSystem(LightningModule):
         self.val_psnr.reset()
 
         w, h = self.train_dataset.img_wh
-        rgb_pred = yuv_to_rgb(rearrange(results['rgb'], '(h w) c -> 1 c h w', h=h))
-        rgb_gt = yuv_to_rgb(rearrange(rgb_gt, '(h w) c -> 1 c h w', h=h))
+        rgb_pred = linear_rgb_to_rgb(rearrange(results['rgb'], '(h w) c -> 1 c h w', h=h))
+        rgb_gt = linear_rgb_to_rgb(rearrange(rgb_gt, '(h w) c -> 1 c h w', h=h))
         self.val_ssim(rgb_pred, rgb_gt)
         logs['ssim'] = self.val_ssim.compute()
         self.val_ssim.reset()
@@ -261,8 +267,8 @@ class NeRFSystem(LightningModule):
 
     def save_image(self, rays, name):
         w, h = self.train_dataset.img_wh
-        rgb_pred = rearrange(rays, '(h w) c -> 1 c h w', h=h)
-        rgb_pred = rearrange(yuv_to_rgb(rgb_pred).squeeze(0), 'c h w -> h w c')
+        rgb_pred = linear_rgb_to_rgb(rearrange(rays, '(h w) c -> 1 c h w', h=h))
+        rgb_pred = rearrange(rgb_pred.squeeze(0), 'c h w -> h w c')
         rgb_pred = torch.clamp(rgb_pred * 255, min=0, max=255).cpu().numpy().astype(np.uint8)
         imageio.imsave(os.path.join(self.val_dir, name), rgb_pred)
 
@@ -296,10 +302,11 @@ def main(hparams):
                       enable_model_summary=False,
                       accelerator='gpu',
                       devices=hparams.num_gpus,
-                      strategy=DDPPlugin(find_unused_parameters=False)
-                      if hparams.num_gpus > 1 else None,
+                      strategy=DDPPlugin(find_unused_parameters=False) if hparams.num_gpus > 1 else None,
                       num_sanity_val_steps=-1 if hparams.val_only else 0,
-                      precision=16)
+                      precision=16,
+                      # gradient_clip_val=0.5
+                      )
 
     trainer.fit(system, ckpt_path=hparams.ckpt_path)
 

@@ -49,21 +49,27 @@ class HistLoss(nn.Module):
         super().__init__()
         # self._hist_func = GaussianHistogram(bins=100, min=-0.436, max=0.436, sigma=1e-2)
         self._hist_func = MultivariateGaussianHistogram(bins=32, min=-0.615, max=0.615, sigma=(1e-2, 1e-2))
-        self._hist_loss = torch.nn.KLDivLoss()
+        self._hist_loss = torch.nn.KLDivLoss(reduction='none')
+        self._l1_loss = torch.nn.L1Loss(reduction='none')
 
-    def forward(self, target, results, **kwargs):
-        tuv, ruv = target[..., 1:3], results[..., 1:3]
-        dhuv = (tuv.mean() - ruv.mean()) ** 2 * 1e-5
+    def forward(self, results, target, **kwargs):
+        tuv, ruv = rearrange(target[..., (0, 2)], 'b h w c -> b c h w'), \
+                   rearrange(results[..., (0, 2)], 'b h w c -> b c h w')
+        dhuv = self._l1_loss(input=ruv.mean(), target=tuv.mean()) * 0
 
-        sptuv, spruv = spatial_gradient(tuv, normalized=False), spatial_gradient(ruv, normalized=False)
-        spmask = torch.all(torch.lt(spruv.abs(), 0.5), dim=2, keepdim=True).expand_as(spruv)
-        dhuv += torch.mean((sptuv[spmask] - spruv[spmask]) ** 2)
+        # sptuv, spruv = spatial_gradient(tuv, mode='diff', normalized=True), \
+        #                spatial_gradient(ruv, mode='diff', normalized=True)
+        # sptuv, spruv = rearrange(sptuv, 'b c o h w -> b h w c o'), rearrange(spruv, 'b c o h w -> b h w c o')
+        # dhuv = dhuv + self._l1_loss(input=spruv, target=sptuv) * 1e-2
+        # spmask = torch.all(torch.lt(spruv.abs(), 1.8), dim=-1)
+        # spmask = torch.all(spmask, dim=-1)
+        # dhuv = dhuv + (sptuv[spmask] - spruv[spmask]) ** 2
 
         # tuv, ruv = torch.nn.functional.avg_pool2d(tuv, (2, 2)), torch.nn.functional.avg_pool2d(ruv, (2, 2))
         # tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')
         # thuv, rhuv = self._hist_func(tuv), self._hist_func(ruv)
-        # dhuv += self._hist_loss(rhuv, thuv) * 1e-1
-
+        # dhuv = self._hist_loss(input=rhuv / rhuv.sum(), target=thuv / thuv.sum()) * 1e-2
+        # dhuv = self._l1_loss(input=rhuv, target=thuv) * 1e-2
         return dhuv
 
 
@@ -74,19 +80,21 @@ class NeRFLoss(nn.Module):
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
 
-    def _yuv_loss(self, target_yuv, results_yuv):
-        ty, tuv = target_yuv[..., 0], target_yuv[..., 1:3]
-        ry, ruv = results_yuv[..., 0], results_yuv[..., 1:3]
-        dy = (ty - ry) ** 2 * 1e-1
-        duv = (tuv - ruv) ** 2 * 1e-3
-
+    def _yuv_loss(self, results_yuv, target_yuv):
+        ry, ruv = results_yuv[..., 1], results_yuv[..., (0, 2)]
+        ty, tuv = target_yuv[..., 1], target_yuv[..., (0, 2)]
+        dy = (ty - ry) ** 2
+        duv = (tuv - ruv) ** 2
         return torch.cat((dy.unsqueeze(-1), duv), dim=-1)
+
+    def _rgb_loss(self, results_yuv, target_yuv):
+        return (results_yuv - target_yuv) ** 2
 
     def forward(self, results, target, **kwargs):
         o = results['opacity'] + 1e-10
 
         d = {
-            'rgb': self._yuv_loss(target_yuv=target['rgb'], results_yuv=results['rgb']),
+            'rgb': self._rgb_loss(results_yuv=results['rgb'], target_yuv=target['rgb']),
             # encourage opacity to be either 0 or 1 to avoid floater
             'opacity': self.lambda_opacity * (-o * torch.log(o)),
         }

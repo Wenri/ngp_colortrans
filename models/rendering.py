@@ -36,6 +36,7 @@ def render(model, rays_o, rays_d, **kwargs):
 
     results = render_func(model, rays_o, rays_d, hits_t, **kwargs)
     for k, v in results.items():
+        v = torch.nan_to_num(v)
         if kwargs.get('to_cpu', False):
             v = v.cpu()
             if kwargs.get('to_numpy', False):
@@ -134,7 +135,7 @@ def __render_rays_train(model, rays_o, rays_d, hits_t, **kwargs):
     results = {}
 
     (rays_a, xyzs, dirs,
-    results['deltas'], results['ts'], results['rm_samples']) = \
+     results['deltas'], results['ts'], results['rm_samples']) = \
         RayMarcher.apply(
             rays_o, rays_d, hits_t[:, 0], model.density_bitfield,
             model.cascades, model.scale,
@@ -146,7 +147,7 @@ def __render_rays_train(model, rays_o, rays_d, hits_t, **kwargs):
     sigmas, rgbs = model(xyzs, dirs, **kwargs)
 
     (results['vr_samples'], results['opacity'],
-    results['depth'], results['rgb'], results['ws']) = \
+     results['depth'], results['rgb'], results['ws']) = \
         VolumeRenderer.apply(sigmas, rgbs, results['deltas'], results['ts'],
                              rays_a, kwargs.get('T_threshold', 1e-4))
     results['rays_a'] = rays_a

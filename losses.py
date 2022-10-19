@@ -55,12 +55,12 @@ class HistLoss(nn.Module):
     def forward(self, results, target, **kwargs):
         tuv, ruv = rearrange(target[..., (0, 2)], 'b h w c -> b c h w'), \
                    rearrange(results[..., (0, 2)], 'b h w c -> b c h w')
-        dhuv = self._l1_loss(input=ruv.mean(), target=tuv.mean()) * 0
+        dhuv = self._l1_loss(input=ruv.mean(), target=tuv.mean()) * 1e-3
 
-        # sptuv, spruv = spatial_gradient(tuv, mode='diff', normalized=True), \
-        #                spatial_gradient(ruv, mode='diff', normalized=True)
-        # sptuv, spruv = rearrange(sptuv, 'b c o h w -> b h w c o'), rearrange(spruv, 'b c o h w -> b h w c o')
-        # dhuv = dhuv + self._l1_loss(input=spruv, target=sptuv) * 1e-2
+        sptuv, spruv = spatial_gradient(tuv, mode='diff', normalized=True), \
+                       spatial_gradient(ruv, mode='diff', normalized=True)
+        sptuv, spruv = rearrange(sptuv, 'b c o h w -> b h w c o'), rearrange(spruv, 'b c o h w -> b h w c o')
+        dhuv = dhuv + self._l1_loss(input=spruv, target=sptuv)
         # spmask = torch.all(torch.lt(spruv.abs(), 1.8), dim=-1)
         # spmask = torch.all(spmask, dim=-1)
         # dhuv = dhuv + (sptuv[spmask] - spruv[spmask]) ** 2
@@ -84,8 +84,8 @@ class NeRFLoss(nn.Module):
         ry, ruv = results_yuv[..., 1], results_yuv[..., (0, 2)]
         ty, tuv = target_yuv[..., 1], target_yuv[..., (0, 2)]
         dy = (ty - ry) ** 2
-        duv = (tuv - ruv) ** 2
-        return torch.cat((dy.unsqueeze(-1), duv), dim=-1)
+        # duv = (tuv - ruv) ** 2 * 1e-8
+        return dy
 
     def _rgb_loss(self, results_yuv, target_yuv):
         return (results_yuv - target_yuv) ** 2

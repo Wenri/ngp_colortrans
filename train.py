@@ -144,14 +144,13 @@ class NeRFSystem(LightningModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
-                          num_workers=16,
-                          persistent_workers=True,
+                          num_workers=0,
                           batch_size=None,
                           pin_memory=True)
 
     def val_dataloader(self):
         return DataLoader(self.test_dataset,
-                          num_workers=8,
+                          num_workers=0,
                           batch_size=None,
                           pin_memory=True)
 
@@ -193,8 +192,8 @@ class NeRFSystem(LightningModule):
             loss_d['unit_exposure'] = \
                 0.5 * (unit_exposure_rgb - self.train_dataset.unit_exposure_rgb) ** 2
 
-        # if 'img' in batch:
-        #     loss_d['img'] = self.deferred_step(**batch, rays=results['rgb'], b_save=batch_nb == 0)
+        if 'img' in batch:
+            loss_d['img'] = self.deferred_step(**batch, rays=results['rgb'], b_save=batch_nb == 0)
 
         loss = sum(lo.mean() for lo in loss_d.values())
 
@@ -227,8 +226,8 @@ class NeRFSystem(LightningModule):
         self.val_psnr.reset()
 
         w, h = self.train_dataset.img_wh
-        rgb_pred = linear_rgb_to_rgb(rearrange(results['rgb'], '(h w) c -> 1 c h w', h=h))
-        rgb_gt = linear_rgb_to_rgb(rearrange(rgb_gt, '(h w) c -> 1 c h w', h=h))
+        rgb_pred = xyz_to_rgb(rearrange(results['rgb'], '(h w) c -> 1 c h w', h=h))
+        rgb_gt = xyz_to_rgb(rearrange(rgb_gt, '(h w) c -> 1 c h w', h=h))
         self.val_ssim(rgb_pred, rgb_gt)
         logs['ssim'] = self.val_ssim.compute()
         self.val_ssim.reset()
@@ -267,7 +266,7 @@ class NeRFSystem(LightningModule):
 
     def save_image(self, rays, name):
         w, h = self.train_dataset.img_wh
-        rgb_pred = linear_rgb_to_rgb(rearrange(rays, '(h w) c -> 1 c h w', h=h))
+        rgb_pred = linear_rgb_to_rgb(xyz_to_rgb(rearrange(rays, '(h w) c -> 1 c h w', h=h)))
         rgb_pred = rearrange(rgb_pred.squeeze(0), 'c h w -> h w c')
         rgb_pred = torch.clamp(rgb_pred * 255, min=0, max=255).cpu().numpy().astype(np.uint8)
         imageio.imsave(os.path.join(self.val_dir, name), rgb_pred)

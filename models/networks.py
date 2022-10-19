@@ -278,11 +278,11 @@ class NGP(NGPBase):
         d = torch.nan_to_num(self.dir_encoder((d + 1) / 2))
         rgbs = torch.nan_to_num(self.rgb_net(torch.cat([d, torch.nan_to_num(h)], 1)))
 
-        # if self.rgb_act is None:
-        #     ry, ruv = rgbs[..., 0], rgbs[..., 1:3]
-        #     ry, ruv = torch.sigmoid(ry), torch.tanh(ruv)
-        #     rgbs = torch.cat((ry.unsqueeze(-1), ruv), -1)
-        if self.rgb_act == 'None':  # rgbs is log-radiance
+        if self.rgb_act is None:
+            ry, ruv = rgbs[..., 0], rgbs[..., 1:3]
+            ry, ruv = torch.sigmoid(ry), torch.tanh(ruv)
+            rgbs = torch.cat((ry.unsqueeze(-1), ruv), -1)
+        elif self.rgb_act == 'None':  # rgbs is log-radiance
             if kwargs.get('output_radiance', False):  # output HDR map
                 rgbs = TruncExp.apply(rgbs)
             else:  # convert to LDR using tonemapper networks

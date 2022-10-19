@@ -3,7 +3,7 @@ import torch
 from einops import rearrange
 from imageio import imread
 import numpy as np
-from kornia.color import rgb_to_xyz, rgb_to_linear_rgb
+from kornia.color import rgb_to_yuv
 
 
 def srgb_to_linear(img):
@@ -29,7 +29,7 @@ def read_image(img_path, img_wh, blend_a=True):
 
     img = cv2.resize(img, img_wh)
     img = rearrange(torch.as_tensor(img), 'h w c -> 1 c h w')
-    img = rgb_to_xyz(rgb_to_linear_rgb(img))
+    img = rgb_to_yuv(img)
     img = rearrange(img.squeeze(0), 'c h w -> (h w) c')
 
     return img

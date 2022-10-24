@@ -1,6 +1,8 @@
 from typing import Optional
 
 import torch
+from PIL import ImageCms
+from PIL import Image
 from kornia.color import lab_to_rgb
 from torch import nn
 from opt import get_opts
@@ -242,6 +244,8 @@ class NeRFSystem(LightningModule):
             idx = batch['img_idxs']
             self.save_image(results['rgb'], f'{idx:03d}.png')
             self.save_depth(results['depth'], f'{idx:03d}_d.png')
+            if not self.current_epoch:
+                self.save_image(batch['rgb'], f'{idx:03d}_gt.png')
 
         return logs
 
@@ -267,11 +271,19 @@ class NeRFSystem(LightningModule):
 
     def save_image(self, rays, name):
         w, h = self.train_dataset.img_wh
-        scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=rays.dtype, device=rays.device)
-        rgb_pred = lab_to_rgb(rearrange(rays * scale, '(h w) c -> 1 c h w', h=h))
-        rgb_pred = rearrange(rgb_pred.squeeze(0), 'c h w -> h w c')
-        rgb_pred = torch.clamp(rgb_pred.round() * 255, min=0, max=255).cpu().numpy().astype(np.uint8)
-        imageio.imsave(os.path.join(self.val_dir, name), rgb_pred)
+        scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=rays.dtype, device=rays.device)
+        L, a, b = torch.unbind(rays * scale, dim=-1)
+        L = torch.clamp(L.round(), 0, 255).cpu().numpy().astype(np.uint8)
+        a = torch.clamp(a.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)
+        b = torch.clamp(b.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)
+        lab = rearrange(np.stack((L, a, b), axis=1), '(h w) c -> h w c', w=w, h=h)
+        lab = Image.fromarray(lab, mode='LAB')
+        # Create sRGB ICC profile and convert image to sRGB
+        lab_icc = ImageCms.createProfile('LAB', colorTemp=6500)
+        # Create sRGB ICC profile and convert image to sRGB
+        srgb_icc = ImageCms.createProfile('sRGB')
+        img = ImageCms.profileToProfile(lab, lab_icc, srgb_icc, outputMode='RGB')
+        img.save(os.path.join(self.val_dir, name))
 
     def save_depth(self, depth, name):
         w, h = self.train_dataset.img_wh

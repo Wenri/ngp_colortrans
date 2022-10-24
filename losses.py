@@ -79,7 +79,7 @@ class NeRFLoss(nn.Module):
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
-        d = np.load('transimg.npz')
+        d = np.load('assets/transimg.npz')
         from_points = d['from_points']
         to_points = d['to_points']
         err = np.seterr(divide='ignore')

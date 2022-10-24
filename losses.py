@@ -60,9 +60,9 @@ class HistLoss(nn.Module):
         sptuv, spruv = rearrange(sptuv, 'b c o h w -> b h w c o'), rearrange(spruv, 'b c o h w -> b h w c o')
         dhuv = rearrange(dhuv, 'b c -> b 1 1 c 1')
         dhuv = dhuv + self._l1_loss(input=spruv, target=sptuv) * 1e-1
-        # spmask = torch.any(torch.lt(spruv.abs(), 0.8), dim=-1)
+        # spmask = torch.any(torch.le(spruv.abs(), 1.0), dim=-1)
         # spmask = torch.any(spmask, dim=-1)
-        # dhuv = self._l1_loss(input=spruv[spmask], target=sptuv[spmask])
+        # dhuv = dhuv + self._l1_loss(input=spruv[spmask], target=sptuv[spmask])
 
         # tuv, ruv = torch.nn.functional.avg_pool2d(tuv, (2, 2)), torch.nn.functional.avg_pool2d(ruv, (2, 2))
         # tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')

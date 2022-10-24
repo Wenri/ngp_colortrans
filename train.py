@@ -1,7 +1,7 @@
 from typing import Optional
 
 import torch
-from kornia.color import yuv_to_rgb
+from kornia.color import lab_to_rgb
 from torch import nn
 from opt import get_opts
 import os
@@ -226,8 +226,9 @@ class NeRFSystem(LightningModule):
         self.val_psnr.reset()
 
         w, h = self.train_dataset.img_wh
-        rgb_pred = yuv_to_rgb(rearrange(results['rgb'], '(h w) c -> 1 c h w', h=h))
-        rgb_gt = yuv_to_rgb(rearrange(rgb_gt, '(h w) c -> 1 c h w', h=h))
+        scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=rgb_gt.dtype, device=rgb_gt.device)
+        rgb_pred = lab_to_rgb(rearrange(results['rgb'] * scale, '(h w) c -> 1 c h w', h=h))
+        rgb_gt = lab_to_rgb(rearrange(rgb_gt * scale, '(h w) c -> 1 c h w', h=h))
         self.val_ssim(rgb_pred, rgb_gt)
         logs['ssim'] = self.val_ssim.compute()
         self.val_ssim.reset()
@@ -266,9 +267,10 @@ class NeRFSystem(LightningModule):
 
     def save_image(self, rays, name):
         w, h = self.train_dataset.img_wh
-        rgb_pred = yuv_to_rgb(rearrange(rays, '(h w) c -> 1 c h w', h=h))
+        scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=rays.dtype, device=rays.device)
+        rgb_pred = lab_to_rgb(rearrange(rays * scale, '(h w) c -> 1 c h w', h=h))
         rgb_pred = rearrange(rgb_pred.squeeze(0), 'c h w -> h w c')
-        rgb_pred = torch.clamp(rgb_pred * 255, min=0, max=255).cpu().numpy().astype(np.uint8)
+        rgb_pred = torch.clamp(rgb_pred.round() * 255, min=0, max=255).cpu().numpy().astype(np.uint8)
         imageio.imsave(os.path.join(self.val_dir, name), rgb_pred)
 
     def save_depth(self, depth, name):

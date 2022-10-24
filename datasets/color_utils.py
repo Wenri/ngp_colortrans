@@ -22,33 +22,33 @@ def linear_to_srgb(img):
     return img
 
 
-def read_image(img_path, img_wh, blend_a=True):
+def read_image(img_path, img_wh):
     log = logging.getLogger(__name__)
     # Read image
     with Image.open(img_path) as image:
         orig_icc = image.info.get('icc_profile')
-        # Extract original ICC profile
-        with BytesIO(orig_icc) as icc:
-            orig_icc = ImageCms.ImageCmsProfile(icc)
-        desc = ImageCms.getProfileDescription(orig_icc)
 
-        # Plot image with original ICC profile
-        log.debug('Original ICC profile: {}'.format(desc))
+        if orig_icc:
+            # Extract original ICC profile
+            with BytesIO(orig_icc) as icc:
+                orig_icc = ImageCms.ImageCmsProfile(icc)
+            desc = ImageCms.getProfileDescription(orig_icc)
+            # Plot image with original ICC profile
+            log.debug('Original ICC profile: {}'.format(desc))
+
+        else:
+            orig_icc = ImageCms.createProfile('sRGB')
+            log.warning('No ICC profile found. Assuming sRGB.')
 
         # Create sRGB ICC profile and convert image to sRGB
-        srgb_icc = ImageCms.createProfile('sRGB')
-        image = ImageCms.profileToProfile(image, orig_icc, srgb_icc)
+        lab_icc = ImageCms.createProfile('LAB', colorTemp=6500)
+        lab = ImageCms.profileToProfile(image, orig_icc, lab_icc, outputMode='LAB')
 
     w, h = img_wh
-    img = F.resize(image, size=[h, w], interpolation=F.InterpolationMode.BICUBIC)
-    img = F.to_tensor(img)
-    if img.shape[0] == 4:  # blend A to RGB
-        if blend_a:
-            img = img[:3] * img[-1:] + (1 - img[-1:])
-        else:
-            img = img[:3] * img[-1:]
-
-    img = rgb_to_yuv(rearrange(img, 'c h w -> 1 c h w')).squeeze(0)
-    img = rearrange(img, 'c h w -> (h w) c')
-
-    return img
+    lab = np.asarray(lab)
+    lab = np.concatenate((lab[..., 0:1], lab.view(np.int8)[..., 1:3]), dtype=np.float_, axis=-1)
+    lab = torch.from_numpy(rearrange(lab, 'h w c -> c h w'))
+    lab = F.resize(lab, size=(h, w), interpolation=F.InterpolationMode.BICUBIC, antialias=True)
+    lab = rearrange(lab, 'c h w -> (h w) c')
+    scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=lab.dtype)
+    return (lab / scale).to(torch.float32)

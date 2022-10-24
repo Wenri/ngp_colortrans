@@ -128,7 +128,7 @@ class ColmapDataset(BaseDataset):
         for img_path in tqdm(img_paths):
             buf = []  # buffer for ray attributes: rgb, etc
 
-            img = read_image(img_path, self.img_wh, blend_a=False)
+            img = read_image(img_path, self.img_wh)
             img = torch.FloatTensor(img)
             buf += [img]
 

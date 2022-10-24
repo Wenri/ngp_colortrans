@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from kornia.color import rgb_to_yuv, rgb_to_yuv420
 from kornia.filters import spatial_gradient
 from torch import nn
@@ -6,6 +7,7 @@ import vren
 from einops import rearrange
 
 from misc.differentiable_histogram import GaussianHistogram, MultivariateGaussianHistogram
+from misc.imagewrap import _make_L_matrix
 from misc.rgb_lab_formulation_pytorch import rgb_to_lab
 
 
@@ -77,11 +79,18 @@ class NeRFLoss(nn.Module):
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
+        d = np.load('transimg.npz')
+        from_points = d['from_points']
+        to_points = d['to_points']
+        err = np.seterr(divide='ignore')
+        L = _make_L_matrix(from_points)
+        V = np.resize(to_points, (len(to_points) + 3, 2))
+        V[-3:, :] = 0
+        coeffs = np.dot(np.linalg.pinv(L), V)
+        self.register_buffer('_coeffs', torch.from_numpy(coeffs))
 
-    def _yuv_loss(self, results_yuv, target_yuv):
-        ry, ty = results_yuv[..., 0], target_yuv[..., 0]
-        dy = (ty - ry) ** 2
-        return dy
+    def _lab_loss(self, results_yuv, target_yuv):
+        return (results_yuv - target_yuv) ** 2
 
     def _rgb_loss(self, results_yuv, target_yuv):
         return (results_yuv - target_yuv) ** 2

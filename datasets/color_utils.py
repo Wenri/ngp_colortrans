@@ -50,5 +50,4 @@ def read_image(img_path, img_wh):
     lab = torch.from_numpy(rearrange(lab, 'h w c -> c h w'))
     lab = F.resize(lab, size=(h, w), interpolation=F.InterpolationMode.BICUBIC, antialias=True)
     lab = rearrange(lab, 'c h w -> (h w) c')
-    scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=lab.dtype)
-    return (lab / scale).to(torch.float32)
+    return lab

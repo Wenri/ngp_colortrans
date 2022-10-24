@@ -55,6 +55,9 @@ class HistLoss(nn.Module):
         self._l1_loss = torch.nn.L1Loss(reduction='none')
 
     def forward(self, results, target, **kwargs):
+        if self:
+            raise NotImplementedError
+
         tuv, ruv = rearrange(target[..., 1:3], 'b h w c -> b c h w'), rearrange(results[..., 1:3], 'b h w c -> b c h w')
         dhuv = self._l1_loss(input=ruv.mean(), target=tuv.mean()) * 1e-3
 
@@ -79,6 +82,10 @@ class NeRFLoss(nn.Module):
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
+
+        self._get_coeffs()
+
+    def _get_coeffs(self):
         d = np.load('assets/transimg.npz')
         from_points = d['from_points']
         to_points = d['to_points']

@@ -1,9 +1,12 @@
+import logging
+
 import torch
 import numpy as np
 import os
 import glob
 from tqdm import tqdm
 
+from misc.imagewrap import _make_L_matrix
 from .ray_utils import *
 from .color_utils import read_image
 from .colmap_utils import \
@@ -13,13 +16,50 @@ from .base import BaseDataset
 
 
 class ColmapDataset(BaseDataset):
+    log = logging.getLogger(__name__)
+    _EPSILON = torch.finfo(torch.float32).eps
+
     def __init__(self, root_dir, split='train', downsample=1.0, **kwargs):
         super().__init__(root_dir, split, downsample)
 
         self.read_intrinsics()
+        try:
+            d = np.load('assets/transimg.npz')
+            from_points = d['from_points']
+            to_points = d['to_points']
+            err = np.seterr(divide='ignore')
+            L = _make_L_matrix(from_points)
+            V = np.resize(to_points, (len(to_points) + 3, 2))
+            V[-3:, :] = 0
+            self.from_points = torch.from_numpy(from_points).to(torch.float32)
+            self._coeffs = torch.from_numpy(np.dot(np.linalg.pinv(L), V)).to(torch.float32)
+        except Exception as e:
+            self.log.exception('From/To points not found. Assuming no warp.')
+            self.from_points = None
+            self._coeffs = None
 
         if kwargs.get('read_meta', True):
             self.read_meta(split, **kwargs)
+
+    def _U(self, x):
+        return x * torch.where(x < self._EPSILON, 0, torch.log(x) / 2)
+
+    def _calculate_f(self, coeffs, x, y):
+        w = coeffs[:-3]
+        a1, ax, ay = coeffs[-3:]
+        # The following may use too much RAM:
+        points = self.from_points
+        distances = self._U(torch.square(points[:, 0] - x[..., None]) + torch.square(points[:, 1] - y[..., None]))
+        distances = (w * distances).sum(axis=-1)
+        return a1 + ax * x + ay * y + distances
+
+    def _img_trans(self, img: torch.Tensor):
+        scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=img.dtype, device=img.device)
+        if self.from_points is not None:
+            L, a, b = torch.unbind(img, dim=1)
+            a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
+            img = torch.stack([L, a, b], dim=1)
+        return (img / scale).to(torch.float32)
 
     def read_intrinsics(self):
         # Step 1: read and scale intrinsics (same for all images)
@@ -61,7 +101,7 @@ class ColmapDataset(BaseDataset):
         bottom = np.array([[0, 0, 0, 1.]])
         for k in imdata:
             im = imdata[k]
-            R = im.qvec2rotmat();
+            R = im.qvec2rotmat()
             t = im.tvec.reshape(3, 1)
             w2c_mats += [np.concatenate([np.concatenate([R, t], 1), bottom], 0)]
         w2c_mats = np.stack(w2c_mats, 0)
@@ -129,7 +169,7 @@ class ColmapDataset(BaseDataset):
             buf = []  # buffer for ray attributes: rgb, etc
 
             img = read_image(img_path, self.img_wh)
-            img = torch.FloatTensor(img)
+            img = torch.FloatTensor(self._img_trans(img))
             buf += [img]
 
             if 'HDR-NeRF' in self.root_dir:  # get exposure

@@ -6,7 +6,7 @@ import os
 import glob
 from tqdm import tqdm
 
-from misc.imagewrap import _make_L_matrix
+from misc.imagewrap import _make_L_matrix, _calculate_f
 from .ray_utils import *
 from .color_utils import read_image
 from .colmap_utils import \
@@ -57,8 +57,10 @@ class ColmapDataset(BaseDataset):
         scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=img.dtype, device=img.device)
         if self.from_points is not None:
             L, a, b = torch.unbind(img, dim=1)
-            a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
-            img = torch.stack([L, a, b], dim=1)
+            # a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
+            a, b = _calculate_f(self._coeffs[:, 0].numpy(), self.from_points.numpy(), a.numpy(), b.numpy()), \
+                   _calculate_f(self._coeffs[:, 1].numpy(), self.from_points.numpy(), a.numpy(), b.numpy())
+            img = torch.stack([L, torch.from_numpy(a), torch.from_numpy(b)], dim=1)
         return (img / scale).to(torch.float32)
 
     def read_intrinsics(self):

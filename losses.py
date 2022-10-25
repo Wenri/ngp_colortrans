@@ -83,19 +83,6 @@ class NeRFLoss(nn.Module):
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
 
-        self._get_coeffs()
-
-    def _get_coeffs(self):
-        d = np.load('assets/transimg.npz')
-        from_points = d['from_points']
-        to_points = d['to_points']
-        err = np.seterr(divide='ignore')
-        L = _make_L_matrix(from_points)
-        V = np.resize(to_points, (len(to_points) + 3, 2))
-        V[-3:, :] = 0
-        coeffs = np.dot(np.linalg.pinv(L), V)
-        self.register_buffer('_coeffs', torch.from_numpy(coeffs))
-
     def _lab_loss(self, results_yuv, target_yuv):
         return (results_yuv - target_yuv) ** 2
 

@@ -199,7 +199,7 @@ class NGP(NGPBase):
 
         self.rgb_net = \
             tcnn.Network(
-                n_input_dims=32, n_output_dims=3,
+                n_input_dims=32, n_output_dims=5,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
@@ -279,9 +279,9 @@ class NGP(NGPBase):
         rgbs = torch.nan_to_num(self.rgb_net(torch.cat([d, torch.nan_to_num(h)], 1)))
 
         if self.rgb_act is None:
-            ry, ruv = rgbs[..., 0], rgbs[..., 1:3]
+            ry, ruv = rgbs[..., :1], rgbs[..., 1:]
             ry, ruv = torch.sigmoid(ry), torch.tanh(ruv)
-            rgbs = torch.cat((ry.unsqueeze(-1), ruv), -1)
+            rgbs = torch.cat((ry, ruv), -1)
         elif self.rgb_act == 'None':  # rgbs is log-radiance
             if kwargs.get('output_radiance', False):  # output HDR map
                 rgbs = TruncExp.apply(rgbs)

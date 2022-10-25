@@ -6,7 +6,7 @@ import os
 import glob
 from tqdm import tqdm
 
-from misc.imagewrap import _make_L_matrix, _calculate_f
+from misc.imagewrap import _make_L_matrix
 from .ray_utils import *
 from .color_utils import read_image
 from .colmap_utils import \
@@ -15,24 +15,29 @@ from .colmap_utils import \
 from .base import BaseDataset
 
 
+def _read_coeffs(name):
+    d = np.load(name)
+    from_points = d['from_points']
+    to_points = d['to_points']
+    L = _make_L_matrix(from_points)
+    V = np.resize(to_points, (len(to_points) + 3, 2))
+    V[-3:, :] = 0
+    coeffs = np.linalg.lstsq(L, V, rcond=None)  # np.dot(np.linalg.pinv(L), V)
+    return from_points, coeffs[0]
+
+
 class ColmapDataset(BaseDataset):
     log = logging.getLogger(__name__)
-    _EPSILON = torch.finfo(torch.float32).eps
+    _EPSILON = torch.finfo(torch.double).eps
 
     def __init__(self, root_dir, split='train', downsample=1.0, **kwargs):
         super().__init__(root_dir, split, downsample)
 
         self.read_intrinsics()
         try:
-            d = np.load('assets/transimg.npz')
-            from_points = d['from_points']
-            to_points = d['to_points']
-            err = np.seterr(divide='ignore')
-            L = _make_L_matrix(from_points)
-            V = np.resize(to_points, (len(to_points) + 3, 2))
-            V[-3:, :] = 0
-            self.from_points = torch.from_numpy(from_points).to(torch.float32)
-            self._coeffs = torch.from_numpy(np.dot(np.linalg.pinv(L), V)).to(torch.float32)
+            from_points, coeffs = _read_coeffs('assets/transimg.npz')
+            self.from_points = torch.from_numpy(from_points)
+            self._coeffs = torch.from_numpy(coeffs)
         except Exception as e:
             self.log.exception('From/To points not found. Assuming no warp.')
             self.from_points = None
@@ -41,7 +46,7 @@ class ColmapDataset(BaseDataset):
         if kwargs.get('read_meta', True):
             self.read_meta(split, **kwargs)
 
-    def _U(self, x):
+    def _U(self, x: torch.Tensor):
         return x * torch.where(x < self._EPSILON, 0, torch.log(x) / 2)
 
     def _calculate_f(self, coeffs, x, y):
@@ -57,11 +62,9 @@ class ColmapDataset(BaseDataset):
         scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=img.dtype, device=img.device)
         if self.from_points is not None:
             L, a, b = torch.unbind(img, dim=1)
-            # a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
-            a, b = _calculate_f(self._coeffs[:, 0].numpy(), self.from_points.numpy(), a.numpy(), b.numpy()), \
-                   _calculate_f(self._coeffs[:, 1].numpy(), self.from_points.numpy(), a.numpy(), b.numpy())
-            img = torch.stack([L, torch.from_numpy(a), torch.from_numpy(b)], dim=1)
-        return (img / scale).to(torch.float32)
+            a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
+            img = torch.stack([L, a, b], dim=1)
+        return torch.clamp((img / scale).to(torch.float32), -1, 1)
 
     def read_intrinsics(self):
         # Step 1: read and scale intrinsics (same for all images)

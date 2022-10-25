@@ -204,8 +204,20 @@ class NGP(NGPBase):
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
                     "output_activation": str(self.rgb_act),
+                    "n_neurons": 128,
+                    "n_hidden_layers": 5,
+                }
+            )
+
+        self.trans_net = \
+            tcnn.Network(
+                n_input_dims=2, n_output_dims=2,
+                network_config={
+                    "otype": "FullyFusedMLP",
+                    "activation": "ReLU",
+                    "output_activation": "None",
                     "n_neurons": 64,
-                    "n_hidden_layers": 2,
+                    "n_hidden_layers": 3,
                 }
             )
 
@@ -279,9 +291,10 @@ class NGP(NGPBase):
         rgbs = torch.nan_to_num(self.rgb_net(torch.cat([d, torch.nan_to_num(h)], 1)))
 
         if self.rgb_act is None:
-            ry, ruv = rgbs[..., :1], rgbs[..., 1:]
-            ry, ruv = torch.sigmoid(ry), torch.tanh(ruv)
-            rgbs = torch.cat((ry, ruv), -1)
+            ry, ruv, rt = rgbs[..., :1], rgbs[..., 1:3], rgbs[..., 3:]
+            ry, ruv, rt = torch.sigmoid(ry), torch.tanh(ruv), torch.nn.functional.leaky_relu(rt)
+            rt = torch.tanh(self.trans_net(rt))
+            rgbs = torch.cat((ry, ruv, rt), -1)
         elif self.rgb_act == 'None':  # rgbs is log-radiance
             if kwargs.get('output_radiance', False):  # output HDR map
                 rgbs = TruncExp.apply(rgbs)

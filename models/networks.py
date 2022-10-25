@@ -1,18 +1,16 @@
-import torch
-from kornia.utils import create_meshgrid3d
-from torch import nn
+import numpy as np
 import tinycudann as tcnn
+import torch
 import vren
 from einops import rearrange
-from .custom_functions import TruncExp
-import numpy as np
+from kornia.utils import create_meshgrid3d
+from torch import nn
 
-from .rendering import NEAR_DISTANCE
+from .custom_functions import TruncExp
+from .rendering import NEAR_DISTANCE, N_CH
 
 
 class NGPBase(nn.Module):
-    N_CH = vren.get_total_channels()
-
     def __init__(self, scale):
         super(NGPBase, self).__init__()
         # scene bounding box
@@ -201,7 +199,7 @@ class NGP(NGPBase):
 
         self.rgb_net = \
             tcnn.Network(
-                n_input_dims=32, n_output_dims=self.N_CH,
+                n_input_dims=32, n_output_dims=N_CH,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",

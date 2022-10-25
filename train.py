@@ -20,7 +20,6 @@ from datasets.ray_utils import axisangle_to_R, get_rays
 
 # models
 from models.networks import NGP
-from models.nerf_helpers import NeRF
 from models.rendering import render, MAX_SAMPLES
 
 # optimizer, losses
@@ -223,13 +222,13 @@ class NeRFSystem(LightningModule):
 
         logs = {}
         # compute each metric per image
-        self.val_psnr(results['rgb'], rgb_gt)
+        self.val_psnr(results['rgb'][..., :3], rgb_gt)
         logs['psnr'] = self.val_psnr.compute()
         self.val_psnr.reset()
 
         w, h = self.train_dataset.img_wh
         scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=rgb_gt.dtype, device=rgb_gt.device)
-        rgb_pred = lab_to_rgb(rearrange(results['rgb'] * scale, '(h w) c -> 1 c h w', h=h))
+        rgb_pred = lab_to_rgb(rearrange(results['rgb'][..., :3] * scale, '(h w) c -> 1 c h w', h=h))
         rgb_gt = lab_to_rgb(rearrange(rgb_gt * scale, '(h w) c -> 1 c h w', h=h))
         self.val_ssim(rgb_pred, rgb_gt)
         logs['ssim'] = self.val_ssim.compute()
@@ -242,7 +241,7 @@ class NeRFSystem(LightningModule):
 
         if not self.hparams.no_save_test:  # save test image to disk
             idx = batch['img_idxs']
-            self.save_image(results['rgb'], f'{idx:03d}.png')
+            self.save_image(results['rgb'][..., :3], f'{idx:03d}.png')
             self.save_depth(results['depth'], f'{idx:03d}_d.png')
             if not self.current_epoch:
                 self.save_image(batch['rgb'], f'{idx:03d}_gt.png')
@@ -273,9 +272,9 @@ class NeRFSystem(LightningModule):
         w, h = self.train_dataset.img_wh
         scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=rays.dtype, device=rays.device)
         L, a, b = torch.unbind(rays * scale, dim=-1)
-        L = torch.clamp(L.round(), 0, 255).cpu().np().astype(np.uint8)
-        a = torch.clamp(a.round(), -128, 127).cpu().np().astype(np.int8).view(np.uint8)
-        b = torch.clamp(b.round(), -128, 127).cpu().np().astype(np.int8).view(np.uint8)
+        L = torch.clamp(L.round(), 0, 255).cpu().numpy().astype(np.uint8)
+        a = torch.clamp(a.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)
+        b = torch.clamp(b.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)
         lab = rearrange(np.stack((L, a, b), axis=1), '(h w) c -> h w c', w=w, h=h)
         lab = Image.fromarray(lab, mode='LAB')
         # Create sRGB ICC profile and convert image to sRGB
@@ -287,7 +286,7 @@ class NeRFSystem(LightningModule):
 
     def save_depth(self, depth, name):
         w, h = self.train_dataset.img_wh
-        depth = depth2img(rearrange(depth.cpu().np(), '(h w) -> h w', h=h))
+        depth = depth2img(rearrange(depth.cpu().numpy(), '(h w) -> h w', h=h))
         imageio.imsave(os.path.join(self.val_dir, name), depth)
 
 

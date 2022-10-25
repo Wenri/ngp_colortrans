@@ -1,11 +1,11 @@
 import logging
 from io import BytesIO
 
+import numpy as np
 import torch
+import torchvision.transforms.functional as F
 from PIL import Image, ImageCms
 from einops import rearrange
-import numpy as np
-import torchvision.transforms.functional as F
 
 
 def srgb_to_linear(img):

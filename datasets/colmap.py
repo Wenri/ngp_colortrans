@@ -58,12 +58,17 @@ class ColmapDataset(BaseDataset):
         distances = (w * distances).sum(axis=-1)
         return a1 + ax * x + ay * y + distances
 
-    def _img_trans(self, img: torch.Tensor):
-        scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=img.dtype, device=img.device)
+    def _trans_ab(self, img):
+        a, b = torch.unbind(img[..., 1:], dim=1)
+        a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
+        return torch.stack((a, b), dim=1)
+
+    def _img_trans(self, img: torch.Tensor, scale=(255., 128., 128.)):
         if self.from_points is not None:
-            L, a, b = torch.unbind(img, dim=1)
-            a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
-            img = torch.stack([L, a, b], dim=1)
+            img = torch.cat((img, self._trans_ab(img)), dim=1)
+            scale = torch.as_tensor(scale + scale[1:], dtype=img.dtype, device=img.device)
+        else:
+            scale = torch.as_tensor(scale, dtype=img.dtype, device=img.device)
         return torch.clamp((img / scale).to(torch.float32), -1, 1)
 
     def read_intrinsics(self):

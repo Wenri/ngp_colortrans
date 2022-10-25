@@ -121,10 +121,8 @@ class NeRFSystem(LightningModule):
 
         if self.hparams.optimize_ext:
             N = len(self.train_dataset.poses)
-            self.register_parameter('dR',
-                                    nn.Parameter(torch.zeros(N, 3, device=self.device)))
-            self.register_parameter('dT',
-                                    nn.Parameter(torch.zeros(N, 3, device=self.device)))
+            self.register_parameter('dR', nn.Parameter(torch.zeros(N, 3, device=self.device)))
+            self.register_parameter('dT', nn.Parameter(torch.zeros(N, 3, device=self.device)))
 
         load_ckpt(self.model, self.hparams.weight_path)
 
@@ -199,7 +197,11 @@ class NeRFSystem(LightningModule):
         loss = sum(lo.mean() for lo in loss_d.values())
 
         with torch.no_grad():
-            self.train_psnr(results['rgb'][..., :3], batch['rgb'][..., :3])
+            scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=batch['rgb'].dtype, device=batch['rgb'].device)
+            rgb_pred = lab_to_rgb(rearrange(results['rgb'][..., :3] * scale, 'b c -> b c 1 1'))
+            rgb_gt = lab_to_rgb(rearrange(batch['rgb'][..., :3] * scale, 'b c -> b c 1 1'))
+            self.train_psnr(rgb_pred, rgb_gt)
+
         self.log('lr', self.net_opt.param_groups[0]['lr'])
         self.log('train/loss', loss)
         # ray marching samples per ray (occupied space on the ray)
@@ -217,22 +219,22 @@ class NeRFSystem(LightningModule):
             os.makedirs(self.val_dir, exist_ok=True)
 
     def validation_step(self, batch, batch_nb):
+        w, h = self.train_dataset.img_wh
         rgb_gt = batch['rgb']
         results = self(batch, split='test')
 
         logs = {}
+        scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=rgb_gt.dtype, device=rgb_gt.device)
         # compute each metric per image
-        self.val_psnr(results['rgb'][..., :3], rgb_gt)
+        rgb_pred = lab_to_rgb(rearrange(results['rgb'][..., :3] * scale, '(h w) c -> 1 c h w', h=h))
+        rgb_gt = lab_to_rgb(rearrange(rgb_gt[..., :3] * scale, '(h w) c -> 1 c h w', h=h))
+        self.val_psnr(rgb_pred, rgb_gt)
         logs['psnr'] = self.val_psnr.compute()
         self.val_psnr.reset()
-
-        w, h = self.train_dataset.img_wh
-        scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=rgb_gt.dtype, device=rgb_gt.device)
-        rgb_pred = lab_to_rgb(rearrange(results['rgb'][..., :3] * scale, '(h w) c -> 1 c h w', h=h))
-        rgb_gt = lab_to_rgb(rearrange(rgb_gt * scale, '(h w) c -> 1 c h w', h=h))
         self.val_ssim(rgb_pred, rgb_gt)
         logs['ssim'] = self.val_ssim.compute()
         self.val_ssim.reset()
+
         if self.hparams.eval_lpips:
             self.val_lpips(torch.clip(rgb_pred * 2 - 1, -1, 1),
                            torch.clip(rgb_gt * 2 - 1, -1, 1))
@@ -241,10 +243,10 @@ class NeRFSystem(LightningModule):
 
         if not self.hparams.no_save_test:  # save test image to disk
             idx = batch['img_idxs']
-            self.save_image(results['rgb'][..., :3], f'{idx:03d}.png')
+            self.save_image_trans(results['rgb'], f'{idx:03d}.png')
             self.save_depth(results['depth'], f'{idx:03d}_d.png')
             if not self.current_epoch:
-                self.save_image(batch['rgb'], f'{idx:03d}_gt.png')
+                self.save_image_trans(batch['rgb'], f'{idx:03d}_gt.png')
 
         return logs
 
@@ -268,10 +270,15 @@ class NeRFSystem(LightningModule):
         items.pop("v_num", None)
         return items
 
-    def save_image(self, rays, name):
+    def save_image_trans(self, rays, name):
+        base, ext = os.path.splitext(name)
+        scale = torch.as_tensor((255.0, 128.0, 128.0, 128.0, 128.0), dtype=rays.dtype, device=rays.device)
+        L, a, b, ta, tb = torch.unbind(rays * scale, dim=-1)
+        self.save_image(L, a, b, name)
+        self.save_image(L, ta, tb, f'{base}_t{ext}')
+
+    def save_image(self, L, a, b, name):
         w, h = self.train_dataset.img_wh
-        scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=rays.dtype, device=rays.device)
-        L, a, b = torch.unbind(rays * scale, dim=-1)
         L = torch.clamp(L.round(), 0, 255).cpu().numpy().astype(np.uint8)
         a = torch.clamp(a.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)
         b = torch.clamp(b.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)

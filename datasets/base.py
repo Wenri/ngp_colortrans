@@ -42,11 +42,11 @@ class BaseDataset(Dataset):
         pix_idxs = np.random.choice(self.img_wh[0] * self.img_wh[1], self.batch_size)
         rays = self.rays[img_idxs, pix_idxs]
         sample = {'img_idxs': img_idxs, 'pix_idxs': pix_idxs,
-                  'rgb': rays[:, :3]}
+                  'rgb': rays[:, :]}
         if self.rays.shape[-1] == 4:  # HDR-NeRF data
-            sample['exposure'] = rays[:, 3:]
+            sample['exposure'] = rays[:, -1:]
         if self.ray_sampling_strategy.startswith('deferred'):
-            sample['img'] = rearrange(self.rays[img_idxs, :, :3], '... (h w) c -> ... h w c',
+            sample['img'] = rearrange(self.rays[img_idxs, :, :], '... (h w) c -> ... h w c',
                                       w=self.img_wh[0], h=self.img_wh[1])
         return sample
 
@@ -57,7 +57,7 @@ class BaseDataset(Dataset):
         sample = {'pose': self.poses[idx], 'img_idxs': idx}
         if len(self.rays) > 0:  # if ground truth available
             rays = self.rays[idx]
-            sample['rgb'] = rays[:, :3]
+            sample['rgb'] = rays[:, :]
             if rays.shape[1] == 4:  # HDR-NeRF data
                 sample['exposure'] = rays[0, 3]  # same exposure for all rays
 

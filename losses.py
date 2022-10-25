@@ -77,25 +77,28 @@ class HistLoss(nn.Module):
 
 
 class NeRFLoss(nn.Module):
+    _EPS = torch.finfo(torch.float32).eps
+
     def __init__(self, lambda_opacity=1e-3, lambda_distortion=1e-3):
         super().__init__()
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
-        self._l1_loss = torch.nn.L1Loss(reduction='none')
+        self._l1_loss = torch.nn.SmoothL1Loss(reduction='none')
         self._l2_loss = torch.nn.MSELoss(reduction='none')
 
-    def _lab_loss(self, results_yuv, target_yuv):
-        return torch.square(results_yuv - target_yuv)
+    def _lab_loss(self, results_ab, target_ab):
+        return self._l1_loss(input=results_ab[..., 3:], target=target_ab[..., 1:3]) * 1e-3
 
-    def _rgb_loss(self, results_yuv, target_yuv):
-        return self._l2_loss(input=results_yuv[..., :3], target=target_yuv)
+    def _rgb_loss(self, results_rgb, target_rgb):
+        return self._l2_loss(input=results_rgb[..., :3], target=target_rgb[..., :3])
 
     def forward(self, results, target, **kwargs):
-        o = results['opacity'] + 1e-10
+        o = results['opacity'] + self._EPS
 
         d = {
-            'rgb': self._rgb_loss(results_yuv=results['rgb'], target_yuv=target['rgb']),
+            'rgb': self._rgb_loss(results_rgb=results['rgb'], target_rgb=target['rgb']),
+            'trans': self._lab_loss(results_ab=results['rgb'], target_ab=target['rgb']),
             # encourage opacity to be either 0 or 1 to avoid floater
             'opacity': self.lambda_opacity * (-o * torch.log(o)),
         }

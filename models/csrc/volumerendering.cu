@@ -237,7 +237,7 @@ __global__ void composite_test_fw_kernel(
         const scalar_t a = 1.0f - __expf(-sigmas[n][s]*deltas[n][s]);
         const scalar_t w = a * T;
 
-        for (int c = 0; c < 3; c++) rgb[r][c] += w * rgbs[n][s][c];
+        for (int c = 0; c < n_ch; c++) rgb[r][c] += w * rgbs[n][s][c];
 
         depth[r] += w*ts[n][s];
         opacity[r] += w;

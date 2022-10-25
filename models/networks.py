@@ -11,6 +11,8 @@ from .rendering import NEAR_DISTANCE
 
 
 class NGPBase(nn.Module):
+    N_CH = vren.get_total_channels()
+
     def __init__(self, scale):
         super(NGPBase, self).__init__()
         # scene bounding box
@@ -199,7 +201,7 @@ class NGP(NGPBase):
 
         self.rgb_net = \
             tcnn.Network(
-                n_input_dims=32, n_output_dims=5,
+                n_input_dims=32, n_output_dims=self.N_CH,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",

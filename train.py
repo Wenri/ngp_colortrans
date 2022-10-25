@@ -200,7 +200,7 @@ class NeRFSystem(LightningModule):
         loss = sum(lo.mean() for lo in loss_d.values())
 
         with torch.no_grad():
-            self.train_psnr(results['rgb'], batch['rgb'])
+            self.train_psnr(results['rgb'][..., :3], batch['rgb'][..., :3])
         self.log('lr', self.net_opt.param_groups[0]['lr'])
         self.log('train/loss', loss)
         # ray marching samples per ray (occupied space on the ray)
@@ -273,9 +273,9 @@ class NeRFSystem(LightningModule):
         w, h = self.train_dataset.img_wh
         scale = torch.as_tensor((255.0, 128.0, 128.0), dtype=rays.dtype, device=rays.device)
         L, a, b = torch.unbind(rays * scale, dim=-1)
-        L = torch.clamp(L.round(), 0, 255).cpu().numpy().astype(np.uint8)
-        a = torch.clamp(a.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)
-        b = torch.clamp(b.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)
+        L = torch.clamp(L.round(), 0, 255).cpu().np().astype(np.uint8)
+        a = torch.clamp(a.round(), -128, 127).cpu().np().astype(np.int8).view(np.uint8)
+        b = torch.clamp(b.round(), -128, 127).cpu().np().astype(np.int8).view(np.uint8)
         lab = rearrange(np.stack((L, a, b), axis=1), '(h w) c -> h w c', w=w, h=h)
         lab = Image.fromarray(lab, mode='LAB')
         # Create sRGB ICC profile and convert image to sRGB
@@ -287,7 +287,7 @@ class NeRFSystem(LightningModule):
 
     def save_depth(self, depth, name):
         w, h = self.train_dataset.img_wh
-        depth = depth2img(rearrange(depth.cpu().numpy(), '(h w) -> h w', h=h))
+        depth = depth2img(rearrange(depth.cpu().np(), '(h w) -> h w', h=h))
         imageio.imsave(os.path.join(self.val_dir, name), depth)
 
 

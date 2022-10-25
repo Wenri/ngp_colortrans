@@ -82,12 +82,14 @@ class NeRFLoss(nn.Module):
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
+        self._l1_loss = torch.nn.L1Loss(reduction='none')
+        self._l2_loss = torch.nn.MSELoss(reduction='none')
 
     def _lab_loss(self, results_yuv, target_yuv):
-        return (results_yuv - target_yuv) ** 2
+        return torch.square(results_yuv - target_yuv)
 
     def _rgb_loss(self, results_yuv, target_yuv):
-        return (results_yuv - target_yuv) ** 2
+        return self._l2_loss(input=results_yuv[..., :3], target=target_yuv)
 
     def forward(self, results, target, **kwargs):
         o = results['opacity'] + 1e-10

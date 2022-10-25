@@ -40,7 +40,7 @@ def render(model, rays_o, rays_d, **kwargs):
         if kwargs.get('to_cpu', False):
             v = v.cpu()
             if kwargs.get('to_numpy', False):
-                v = v.numpy()
+                v = v.np()
         results[k] = v
     return results
 
@@ -153,12 +153,12 @@ def __render_rays_train(model, rays_o, rays_d, hits_t, **kwargs):
     results['rays_a'] = rays_a
 
     if exp_step_factor == 0:  # synthetic
-        rgb_bg = torch.ones(3, device=rays_o.device)
+        rgb_bg = torch.ones_like(results['rgb'])
     else:  # real
         if kwargs.get('random_bg', False):
-            rgb_bg = torch.rand(3, device=rays_o.device)
+            rgb_bg = torch.rand_like(results['rgb'])
         else:
-            rgb_bg = torch.zeros(3, device=rays_o.device)
+            rgb_bg = torch.zeros_like(results['rgb'])
     results['rgb'] = results['rgb'] + rgb_bg * rearrange(1 - results['opacity'], 'n -> n 1')
 
     return results

@@ -1,6 +1,5 @@
 #include "utils.h"
 
-
 std::vector<torch::Tensor> ray_aabb_intersect(
     const torch::Tensor rays_o,
     const torch::Tensor rays_d,
@@ -230,6 +229,9 @@ torch::Tensor distortion_loss_bw(
                                  ws, deltas, ts, rays_a);
 }
 
+size_t get_total_channels(void){
+    return n_ch;
+}
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
     m.def("ray_aabb_intersect", &ray_aabb_intersect);
@@ -248,4 +250,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
     m.def("distortion_loss_fw", &distortion_loss_fw);
     m.def("distortion_loss_bw", &distortion_loss_bw);
 
+    m.def("get_total_channels", &get_total_channels);
 }

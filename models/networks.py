@@ -199,34 +199,11 @@ class NGP(NGPBase):
 
         self.rgb_net = \
             tcnn.Network(
-                n_input_dims=32, n_output_dims=16,
+                n_input_dims=32, n_output_dims=5,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
                     "output_activation": str(self.rgb_act),
-                    "n_neurons": 64,
-                    "n_hidden_layers": 2,
-                }
-            )
-
-        self.trans_net = \
-            tcnn.NetworkWithInputEncoding(
-                n_input_dims=32, n_output_dims=2,
-                encoding_config={
-                    "otype": "Composite",
-                    "nested": [
-                        {
-                            "n_dims_to_encode": 3,  # Spatial dims
-                            "otype": "Frequency",
-                            "n_frequencies": 12
-                        }, {
-                            # Number of remaining linear dims is automatically derived
-                            "otype": "Identity"
-                        }]},
-                network_config={
-                    "otype": "FullyFusedMLP",
-                    "activation": "ReLU",
-                    "output_activation": "None",
                     "n_neurons": 64,
                     "n_hidden_layers": 2,
                 }
@@ -300,14 +277,12 @@ class NGP(NGPBase):
         sigmas, h = self.density(x, return_feat=True)
         d = d / torch.norm(d, dim=1, keepdim=True)
         d = self.dir_encoder((d + 1) / 2)
-        h = torch.cat((d, sigmas[:, None], torch.nn.functional.leaky_relu(h[:, 1:])), dim=1)
+        h = torch.cat((d, torch.sigmoid(h[:, :1]), torch.nn.functional.leaky_relu(h[:, 1:])), dim=1)
         rgbs = self.rgb_net(h)
 
         if self.rgb_act is None:
             ry, ruv, rt = rgbs[..., :1], rgbs[..., 1:3], rgbs[..., 3:]
-            ry, ruv, rt = torch.sigmoid(ry), torch.tanh(ruv), torch.nn.functional.leaky_relu(rt)
-            rt = torch.cat((x, d, rt), dim=1)
-            rt = torch.tanh(self.trans_net(rt))
+            ry, ruv, rt = torch.sigmoid(ry), torch.tanh(ruv), torch.tanh(rt)
             rgbs = torch.cat((ry, ruv, rt), -1)
         elif self.rgb_act == 'None':  # rgbs is log-radiance
             if kwargs.get('output_radiance', False):  # output HDR map

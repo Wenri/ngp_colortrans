@@ -199,7 +199,7 @@ class NGP(NGPBase):
 
         self.rgb_net = \
             tcnn.Network(
-                n_input_dims=32, n_output_dims=N_CH,
+                n_input_dims=32, n_output_dims=16,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
@@ -210,14 +210,31 @@ class NGP(NGPBase):
             )
 
         self.trans_net = \
-            tcnn.Network(
-                n_input_dims=2, n_output_dims=2,
+            tcnn.NetworkWithInputEncoding(
+                n_input_dims=16, n_output_dims=2,
+                encoding_config={
+                    "otype": "Composite",
+                    "nested": [
+                        {
+                            "n_dims_to_encode": 3,  # Spatial dims
+                            "otype": "Grid",
+                            "type": "Hash",
+                            "n_levels": L,
+                            "n_features_per_level": F,
+                            "log2_hashmap_size": log2_T,
+                            "base_resolution": N_min,
+                            "per_level_scale": b,
+                            "interpolation": "Linear"
+                        }, {
+                            # Number of remaining linear dims is automatically derived
+                            "otype": "Identity"
+                        }]},
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
                     "output_activation": "None",
-                    "n_neurons": 64,
-                    "n_hidden_layers": 3,
+                    "n_neurons": 128,
+                    "n_hidden_layers": 5,
                 }
             )
 
@@ -286,13 +303,14 @@ class NGP(NGPBase):
             rgbs: (N, 3)
         """
         sigmas, h = self.density(x, return_feat=True)
-        d = torch.nan_to_num(d / torch.norm(d, dim=1, keepdim=True))
-        d = torch.nan_to_num(self.dir_encoder((d + 1) / 2))
-        rgbs = torch.nan_to_num(self.rgb_net(torch.cat([d, torch.nan_to_num(h)], 1)))
+        d = d / torch.norm(d, dim=1, keepdim=True)
+        d = self.dir_encoder((d + 1) / 2)
+        rgbs = self.rgb_net(torch.cat((d, h), dim=1))
 
         if self.rgb_act is None:
             ry, ruv, rt = rgbs[..., :1], rgbs[..., 1:3], rgbs[..., 3:]
             ry, ruv, rt = torch.sigmoid(ry), torch.tanh(ruv), torch.nn.functional.leaky_relu(rt)
+            rt = torch.cat((x, rt), dim=1)
             rt = torch.tanh(self.trans_net(rt))
             rgbs = torch.cat((ry, ruv, rt), -1)
         elif self.rgb_act == 'None':  # rgbs is log-radiance

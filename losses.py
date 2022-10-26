@@ -88,7 +88,7 @@ class NeRFLoss(nn.Module):
         self._l2_loss = torch.nn.MSELoss(reduction='none')
 
     def _lab_loss(self, results_ab, target_ab):
-        return self._l1_loss(input=results_ab[..., 3:], target=target_ab[..., 3:]) * 1e-2
+        return self._l1_loss(input=results_ab[..., 3:], target=target_ab[..., 1:3]) * 1e-1
 
     def _rgb_loss(self, results_rgb, target_rgb):
         return self._l2_loss(input=results_rgb[..., :3], target=target_rgb[..., :3])

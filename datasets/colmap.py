@@ -58,9 +58,10 @@ class ColmapDataset(BaseDataset):
         distances = (w * distances).sum(axis=-1)
         return a1 + ax * x + ay * y + distances
 
-    def _trans_ab(self, img):
+    def _trans_ab(self, img, skip=True):
         a, b = torch.unbind(img[..., 1:], dim=1)
-        a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
+        if not skip:
+            a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
         return torch.stack((a, b), dim=1)
 
     def _img_trans(self, img: torch.Tensor, scale=(255., 128., 128.)):

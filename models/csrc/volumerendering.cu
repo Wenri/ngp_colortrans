@@ -134,11 +134,7 @@ __global__ void composite_train_bw_kernel(
         T *= 1.0f-a;
 
         // compute gradients by math...
-        for (int c = 0; c < n_ch; c++) {
-            dL_drgbs[s][0] = dL_drgb[ray_idx][0]*w;
-            dL_drgbs[s][1] = dL_drgb[ray_idx][1]*w;
-            dL_drgbs[s][2] = dL_drgb[ray_idx][2]*w;
-        }
+        for (int c = 0; c < n_ch; c++) dL_drgbs[s][c] = dL_drgb[ray_idx][c]*w;
 
         scalar_t gradients_from_rgb = 0.0f;
         for (int c = 0; c < n_ch; c++) gradients_from_rgb += dL_drgb[ray_idx][c]*(rgbs[s][c]*T-(RGB[c]-ref[c]));

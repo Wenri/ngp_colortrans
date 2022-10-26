@@ -11,8 +11,8 @@ import glob
 import imageio
 import numpy as np
 import cv2
+import matplotlib.pyplot as plt
 from einops import rearrange
-
 # data
 from torch.utils.data import DataLoader
 from datasets import dataset_dict
@@ -228,6 +228,10 @@ class NeRFSystem(LightningModule):
         # compute each metric per image
         rgb_pred = lab_to_rgb(rearrange(results['rgb'][..., :3] * scale, '(h w) c -> 1 c h w', h=h))
         rgb_gt = lab_to_rgb(rearrange(rgb_gt[..., :3] * scale, '(h w) c -> 1 c h w', h=h))
+
+        plt.imshow(rearrange(rgb_pred.squeeze(0), 'c h w -> h w c').cpu().numpy())
+        plt.show()
+
         self.val_psnr(rgb_pred, rgb_gt)
         logs['psnr'] = self.val_psnr.compute()
         self.val_psnr.reset()

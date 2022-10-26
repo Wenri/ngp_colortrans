@@ -91,7 +91,7 @@ def __render_rays_test(model, rays_o, rays_d, hits_t, **kwargs):
         total_samples += N_eff_samples.sum()
         xyzs = rearrange(xyzs, 'n1 n2 c -> (n1 n2) c')
         dirs = rearrange(dirs, 'n1 n2 c -> (n1 n2) c')
-        valid_mask = ~torch.all(dirs == 0, dim=1)
+        valid_mask = torch.any(dirs, dim=1)
         if valid_mask.sum() == 0: break
 
         sigmas = torch.zeros(len(xyzs), device=device)

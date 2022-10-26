@@ -1,4 +1,7 @@
+import matplotlib.pyplot as plt
 import torch
+from kornia.color import lab_to_rgb
+
 from opt import get_opts
 import numpy as np
 from einops import rearrange
@@ -13,7 +16,9 @@ from models.rendering import render
 from train import depth2img
 from utils import load_ckpt
 
-import warnings; warnings.filterwarnings("ignore")
+import warnings
+
+warnings.filterwarnings("ignore")
 
 
 class OrbitCamera:
@@ -52,9 +57,11 @@ class OrbitCamera:
 
 
 class NGPGUI:
+    _DEBUG_TRIG = False
+
     def __init__(self, hparams, K, img_wh, radius=2.5):
         self.hparams = hparams
-        rgb_act = 'None' if self.hparams.use_exposure else 'Sigmoid'
+        rgb_act = 'None' if self.hparams.use_exposure else None
         self.model = NGP(scale=hparams.scale, rgb_act=rgb_act).cuda()
         load_ckpt(self.model, hparams.ckpt_path)
 
@@ -76,28 +83,37 @@ class NGPGUI:
 
         # TODO: set these attributes by gui
         if self.hparams.dataset_name in ['colmap', 'nerfpp']:
-            exp_step_factor = 1/256
+            exp_step_factor = 1 / 256
         else:
             exp_step_factor = 0
 
         results = render(self.model, rays_o, rays_d,
                          **{'test_time': True,
-                            'to_cpu': True, 'to_numpy': True,
+                            # 'to_cpu': True, 'to_numpy': True,
                             'T_threshold': 1e-2,
-                            'exposure': torch.cuda.FloatTensor([dpg.get_value('_exposure')]),
+                            # 'exposure': torch.cuda.FloatTensor([dpg.get_value('_exposure')]),
                             'max_samples': 100,
                             'exp_step_factor': exp_step_factor})
 
-        rgb = rearrange(results["rgb"], "(h w) c -> h w c", h=self.H)
-        depth = rearrange(results["depth"], "(h w) -> h w", h=self.H)
+        scale = torch.as_tensor((100.0, 128.0, 128.0, 128.0, 128.0), dtype=results["rgb"].dtype,
+                                device=results["rgb"].device)
+        rgb = results["rgb"] * scale
+        rgb = torch.concat((rgb[:, :1], rgb[:, 3:]), dim=1)
+        rgb = lab_to_rgb(rearrange(rgb, "(h w) c -> 1 c h w", h=self.H))
+        rgb = np.ascontiguousarray(rearrange(rgb.squeeze(0), "c h w -> h w c").cpu().numpy())
+        if not NGPGUI._DEBUG_TRIG:
+            plt.imshow(rgb)
+            plt.show()
+            NGPGUI._DEBUG_TRIG = True
+        depth = rearrange(results["depth"], "(h w) -> h w", h=self.H).cpu().numpy()
         torch.cuda.synchronize()
-        self.dt = time.time()-t
-        self.mean_samples = results['total_samples']/len(rays_o)
+        self.dt = time.time() - t
+        self.mean_samples = results['total_samples'] / len(rays_o)
 
         if self.img_mode == 0:
             return rgb
         elif self.img_mode == 1:
-            return depth2img(depth).astype(np.float32)/255.0
+            return depth2img(depth).astype(np.float32) / 255.0
 
     def register_dpg(self):
         dpg.create_context()
@@ -118,14 +134,14 @@ class NGPGUI:
         dpg.set_primary_window("_primary_window", True)
 
         def callback_depth(sender, app_data):
-            self.img_mode = 1-self.img_mode
+            self.img_mode = 1 - self.img_mode
 
         ## control window ##
         with dpg.window(label="Control", tag="_control_window", width=200, height=150):
             dpg.add_slider_float(label="exposure", default_value=0.2,
-                                 min_value=1/60, max_value=32, tag="_exposure")
+                                 min_value=1 / 60, max_value=32, tag="_exposure")
             dpg.add_button(label="show depth", tag="_button_depth",
-                            callback=callback_depth)
+                           callback=callback_depth)
             dpg.add_separator()
             dpg.add_text('no data', tag="_log_time")
             dpg.add_text('no data', tag="_samples_per_ray")
@@ -178,7 +194,7 @@ class NGPGUI:
     def render(self):
         while dpg.is_dearpygui_running():
             dpg.set_value("_texture", self.render_cam(self.cam))
-            dpg.set_value("_log_time", f'Render time: {1000*self.dt:.2f} ms')
+            dpg.set_value("_log_time", f'Render time: {1000 * self.dt:.2f} ms')
             dpg.set_value("_samples_per_ray", f'Samples/ray: {self.mean_samples:.2f}')
             dpg.render_dearpygui_frame()
 

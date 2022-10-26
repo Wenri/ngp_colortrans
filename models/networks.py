@@ -204,8 +204,8 @@ class NGP(NGPBase):
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
                     "output_activation": str(self.rgb_act),
-                    "n_neurons": 128,
-                    "n_hidden_layers": 5,
+                    "n_neurons": 64,
+                    "n_hidden_layers": 2,
                 }
             )
 
@@ -233,8 +233,8 @@ class NGP(NGPBase):
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
                     "output_activation": "None",
-                    "n_neurons": 128,
-                    "n_hidden_layers": 5,
+                    "n_neurons": 64,
+                    "n_hidden_layers": 1,
                 }
             )
 
@@ -265,6 +265,7 @@ class NGP(NGPBase):
         x = (x - self.xyz_min) / (self.xyz_max - self.xyz_min)
         h = self.xyz_encoder(x)
         sigmas = TruncExp.apply(h[:, 0])
+        # sigmas = torch.nn.functional.softplus(h[:, 0])
         if return_feat:
             return sigmas, h
         return sigmas
@@ -305,7 +306,8 @@ class NGP(NGPBase):
         sigmas, h = self.density(x, return_feat=True)
         d = d / torch.norm(d, dim=1, keepdim=True)
         d = self.dir_encoder((d + 1) / 2)
-        rgbs = self.rgb_net(torch.cat((d, h), dim=1))
+        h = torch.cat((d, sigmas[:, None], torch.nn.functional.leaky_relu(h[:, 1:])), dim=1)
+        rgbs = self.rgb_net(h)
 
         if self.rgb_act is None:
             ry, ruv, rt = rgbs[..., :1], rgbs[..., 1:3], rgbs[..., 3:]

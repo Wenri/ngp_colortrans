@@ -211,20 +211,14 @@ class NGP(NGPBase):
 
         self.trans_net = \
             tcnn.NetworkWithInputEncoding(
-                n_input_dims=16, n_output_dims=2,
+                n_input_dims=32, n_output_dims=2,
                 encoding_config={
                     "otype": "Composite",
                     "nested": [
                         {
                             "n_dims_to_encode": 3,  # Spatial dims
-                            "otype": "Grid",
-                            "type": "Hash",
-                            "n_levels": L,
-                            "n_features_per_level": F,
-                            "log2_hashmap_size": log2_T,
-                            "base_resolution": N_min,
-                            "per_level_scale": b,
-                            "interpolation": "Linear"
+                            "otype": "Frequency",
+                            "n_frequencies": 12
                         }, {
                             # Number of remaining linear dims is automatically derived
                             "otype": "Identity"
@@ -234,7 +228,7 @@ class NGP(NGPBase):
                     "activation": "ReLU",
                     "output_activation": "None",
                     "n_neurons": 64,
-                    "n_hidden_layers": 1,
+                    "n_hidden_layers": 2,
                 }
             )
 
@@ -264,8 +258,8 @@ class NGP(NGPBase):
         """
         x = (x - self.xyz_min) / (self.xyz_max - self.xyz_min)
         h = self.xyz_encoder(x)
-        sigmas = TruncExp.apply(h[:, 0])
-        # sigmas = torch.nn.functional.softplus(h[:, 0])
+        # sigmas = TruncExp.apply(h[:, 0])
+        sigmas = torch.nn.functional.softplus(h[:, 0])
         if return_feat:
             return sigmas, h
         return sigmas
@@ -312,7 +306,7 @@ class NGP(NGPBase):
         if self.rgb_act is None:
             ry, ruv, rt = rgbs[..., :1], rgbs[..., 1:3], rgbs[..., 3:]
             ry, ruv, rt = torch.sigmoid(ry), torch.tanh(ruv), torch.nn.functional.leaky_relu(rt)
-            rt = torch.cat((x, rt), dim=1)
+            rt = torch.cat((x, d, rt), dim=1)
             rt = torch.tanh(self.trans_net(rt))
             rgbs = torch.cat((ry, ruv, rt), -1)
         elif self.rgb_act == 'None':  # rgbs is log-radiance

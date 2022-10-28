@@ -28,7 +28,7 @@ def _read_coeffs(name):
 
 class ColmapDataset(BaseDataset):
     log = logging.getLogger(__name__)
-    _EPSILON = torch.finfo(torch.double).eps
+    _EPSILON = np.finfo(np.float).eps
 
     def __init__(self, root_dir, split='train', downsample=1.0, **kwargs):
         super().__init__(root_dir, split, downsample)
@@ -36,8 +36,8 @@ class ColmapDataset(BaseDataset):
         self.read_intrinsics()
         try:
             from_points, coeffs = _read_coeffs('assets/transimg.npz')
-            self.from_points = torch.from_numpy(from_points)
-            self._coeffs = torch.from_numpy(coeffs)
+            self.from_points = np.asarray(from_points, dtype=np.float128)
+            self._coeffs = np.asarray(coeffs, dtype=np.float128)
         except Exception as e:
             self.log.exception('From/To points not found. Assuming no warp.')
             self.from_points = None
@@ -46,23 +46,23 @@ class ColmapDataset(BaseDataset):
         if kwargs.get('read_meta', True):
             self.read_meta(split, **kwargs)
 
-    def _U(self, x: torch.Tensor):
-        return x * torch.where(x < self._EPSILON, 0, torch.log(x) / 2)
+    def _U(self, x: np.ndarray):
+        return x * np.where(x < self._EPSILON, 0, np.log(x) / 2)
 
     def _calculate_f(self, coeffs, x, y):
         w = coeffs[:-3]
         a1, ax, ay = coeffs[-3:]
         # The following may use too much RAM:
         points = self.from_points
-        distances = self._U(torch.square(points[:, 0] - x[..., None]) + torch.square(points[:, 1] - y[..., None]))
+        distances = self._U(np.square(points[:, 0] - x[..., None]) + np.square(points[:, 1] - y[..., None]))
         distances = (w * distances).sum(axis=-1)
         return a1 + ax * x + ay * y + distances
 
     def _trans_ab(self, img, skip=False):
-        a, b = torch.unbind(img[..., 1:], dim=1)
+        a, b = np.asarray(img[..., 1], np.float128), np.asarray(img[..., 2], np.float128)
         if not skip:
             a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
-        return torch.stack((a, b), dim=1)
+        return torch.from_numpy(np.stack((a, b), dim=1))
 
     def _img_trans(self, img: torch.Tensor, scale=(255., 128., 128.)):
         if self.from_points is not None:

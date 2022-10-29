@@ -137,7 +137,8 @@ __global__ void composite_train_bw_kernel(
         for (int c = 0; c < n_ch; c++) dL_drgbs[s][c] = dL_drgb[ray_idx][c]*w;
 
         scalar_t gradients_from_rgb = 0.0f;
-        for (int c = 0; c < n_ch; c++) gradients_from_rgb += dL_drgb[ray_idx][c]*(rgbs[s][c]*T-(RGB[c]-ref[c]));
+        for (int c = 0; c < n_ch; c++)
+            gradients_from_rgb += dL_drgb[ray_idx][c]*(rgbs[s][c]*T-(RGB[c]-ref[c]));
 
         dL_dsigmas[s] = deltas[s] * (gradients_from_rgb + // gradients from rgb
             dL_dopacity[ray_idx]*(1-O) + // gradient from opacity

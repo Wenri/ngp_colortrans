@@ -79,16 +79,21 @@ class HistLoss(nn.Module):
 class NeRFLoss(nn.Module):
     _EPS = torch.finfo(torch.float32).eps
 
-    def __init__(self, lambda_opacity=1e-3, lambda_distortion=1e-3):
+    def __init__(self, n_color_ch, lambda_opacity=1e-3, lambda_distortion=1e-3):
         super().__init__()
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
         self._l1_loss = torch.nn.HuberLoss(reduction='none', delta=0.1)
         self._l2_loss = torch.nn.MSELoss(reduction='none')
+        self._n_color_ch = n_color_ch
+
+    def setup_sem_ind(self, sem_ind):
+        self.register_buffer('sem_ind', sem_ind)
 
     def _lab_loss(self, results_ab, target_ab):
-        return self._l1_loss(input=results_ab[..., 3:], target=target_ab[..., 3:]) * 1e-1
+        return self._l1_loss(input=results_ab[..., 3:self._n_color_ch],
+                             target=target_ab[..., 3:self._n_color_ch]) * 1e-1
 
     def _rgb_loss(self, results_rgb, target_rgb):
         return self._l2_loss(input=results_rgb[..., :3], target=target_rgb[..., :3])

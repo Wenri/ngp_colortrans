@@ -13,6 +13,7 @@ from .colmap_utils import \
     read_cameras_binary, read_images_binary, read_points3d_binary
 
 from .base import BaseDataset
+from .seg_util import read_seg
 
 
 def _read_coeffs(name):
@@ -58,7 +59,7 @@ class ColmapDataset(BaseDataset):
         distances = (w * distances).sum(axis=-1)
         return a1 + ax * x + ay * y + distances
 
-    def _trans_ab(self, img, skip=False):
+    def _trans_ab(self, img, skip=True):
         a, b = torch.unbind(img[..., 1:], dim=1)
         if not skip:
             a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
@@ -71,6 +72,45 @@ class ColmapDataset(BaseDataset):
         else:
             scale = torch.as_tensor(scale, dtype=img.dtype, device=img.device)
         return torch.clamp((img / scale).to(torch.float32), -1, 1)
+
+    def _read_imgbuf(self, img_path):
+        img = read_image(img_path, self.img_wh)
+        img = torch.FloatTensor(self._img_trans(img))
+        buf = [img]  # buffer for ray attributes: rgb, etc
+
+        if 'HDR-NeRF' in self.root_dir:  # get exposure
+            folder = self.root_dir.split('/')
+            scene = folder[-1] if folder[-1] != '' else folder[-2]
+            if scene in ['bathroom', 'bear', 'chair', 'desk']:
+                e_dict = {e: 1 / 8 * 4 ** e for e in range(5)}
+            elif scene in ['diningroom', 'dog']:
+                e_dict = {e: 1 / 16 * 4 ** e for e in range(5)}
+            elif scene in ['sofa']:
+                e_dict = {0: 0.25, 1: 1, 2: 2, 3: 4, 4: 16}
+            elif scene in ['sponza']:
+                e_dict = {0: 0.5, 1: 2, 2: 4, 3: 8, 4: 32}
+            elif scene in ['box']:
+                e_dict = {0: 2 / 3, 1: 1 / 3, 2: 1 / 6, 3: 0.1, 4: 0.05}
+            elif scene in ['computer']:
+                e_dict = {0: 1 / 3, 1: 1 / 8, 2: 1 / 15, 3: 1 / 30, 4: 1 / 60}
+            elif scene in ['flower']:
+                e_dict = {0: 1 / 3, 1: 1 / 6, 2: 0.1, 3: 0.05, 4: 1 / 45}
+            elif scene in ['luckycat']:
+                e_dict = {0: 2, 1: 1, 2: 0.5, 3: 0.25, 4: 0.125}
+            e = int(img_path.split('.')[0][-1])
+            buf.append(e_dict[e] * torch.ones_like(img[:, :1]))
+
+        return torch.cat(buf, 1)
+
+    def _read_imgseg(self, img_path):
+        seg = read_seg(img_path, self.img_wh)
+        return seg
+
+    def sort_sem(self):
+        prob = torch.softmax(self.segs, dim=2, dtype=torch.float32)
+        prob = torch.sum(prob, dim=(0, 1))
+        ind = torch.argsort(prob, descending=True)
+        return ind
 
     def read_intrinsics(self):
         # Step 1: read and scale intrinsics (same for all images)
@@ -127,7 +167,6 @@ class ColmapDataset(BaseDataset):
         self.poses[..., 3] /= scale
         self.pts3d /= scale
 
-        self.rays = []
         if split == 'test_traj':  # use precomputed test poses
             self.poses = create_spheric_poses(1.2, self.poses[:, 1, 3].mean())
             self.poses = torch.FloatTensor(self.poses)
@@ -175,37 +214,10 @@ class ColmapDataset(BaseDataset):
                 img_paths = [x for i, x in enumerate(img_paths) if i % 8 == 0]
                 self.poses = np.array([x for i, x in enumerate(self.poses) if i % 8 == 0])
 
+        print(f'Loading {len(img_paths)} {split} segs ...')
+        self.segs = torch.stack(tuple(map(self._read_imgseg, tqdm(img_paths))))  # (N_images, hw, ?)
+
         print(f'Loading {len(img_paths)} {split} images ...')
-        for img_path in tqdm(img_paths):
-            buf = []  # buffer for ray attributes: rgb, etc
+        self.rays = torch.stack(tuple(map(self._read_imgbuf, tqdm(img_paths))))  # (N_images, hw, ?)
 
-            img = read_image(img_path, self.img_wh)
-            img = torch.FloatTensor(self._img_trans(img))
-            buf += [img]
-
-            if 'HDR-NeRF' in self.root_dir:  # get exposure
-                folder = self.root_dir.split('/')
-                scene = folder[-1] if folder[-1] != '' else folder[-2]
-                if scene in ['bathroom', 'bear', 'chair', 'desk']:
-                    e_dict = {e: 1 / 8 * 4 ** e for e in range(5)}
-                elif scene in ['diningroom', 'dog']:
-                    e_dict = {e: 1 / 16 * 4 ** e for e in range(5)}
-                elif scene in ['sofa']:
-                    e_dict = {0: 0.25, 1: 1, 2: 2, 3: 4, 4: 16}
-                elif scene in ['sponza']:
-                    e_dict = {0: 0.5, 1: 2, 2: 4, 3: 8, 4: 32}
-                elif scene in ['box']:
-                    e_dict = {0: 2 / 3, 1: 1 / 3, 2: 1 / 6, 3: 0.1, 4: 0.05}
-                elif scene in ['computer']:
-                    e_dict = {0: 1 / 3, 1: 1 / 8, 2: 1 / 15, 3: 1 / 30, 4: 1 / 60}
-                elif scene in ['flower']:
-                    e_dict = {0: 1 / 3, 1: 1 / 6, 2: 0.1, 3: 0.05, 4: 1 / 45}
-                elif scene in ['luckycat']:
-                    e_dict = {0: 2, 1: 1, 2: 0.5, 3: 0.25, 4: 0.125}
-                e = int(img_path.split('.')[0][-1])
-                buf += [e_dict[e] * torch.ones_like(img[:, :1])]
-
-            self.rays += [torch.cat(buf, 1)]
-
-        self.rays = torch.stack(self.rays)  # (N_images, hw, ?)
         self.poses = torch.FloatTensor(self.poses)  # (N_images, 3, 4)

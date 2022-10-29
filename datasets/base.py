@@ -18,6 +18,7 @@ class BaseDataset(Dataset):
         self.ray_sampling_strategy = 'all_images'
         self.poses = None
         self.rays = None
+        self.segs = None
         self.img_wh = None
 
     def read_intrinsics(self):
@@ -43,6 +44,8 @@ class BaseDataset(Dataset):
         rays = self.rays[img_idxs, pix_idxs]
         sample = {'img_idxs': img_idxs, 'pix_idxs': pix_idxs,
                   'rgb': rays[:, :]}
+        if self.segs is not None:
+            sample['seg'] = self.segs[img_idxs, pix_idxs]
         if self.rays.shape[-1] == 4:  # HDR-NeRF data
             sample['exposure'] = rays[:, -1:]
         if self.ray_sampling_strategy.startswith('deferred'):
@@ -58,6 +61,8 @@ class BaseDataset(Dataset):
         if len(self.rays) > 0:  # if ground truth available
             rays = self.rays[idx]
             sample['rgb'] = rays[:, :]
+            if self.segs is not None:
+                sample['seg'] = self.segs[idx]
             if rays.shape[1] == 4:  # HDR-NeRF data
                 sample['exposure'] = rays[0, 3]  # same exposure for all rays
 

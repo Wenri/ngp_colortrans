@@ -66,8 +66,6 @@ class NeRFSystem(LightningModule):
         self.warmup_steps = 256
         self.update_interval = 16
 
-        self.loss = NeRFLoss(lambda_distortion=self.hparams.distortion_loss_w)
-        self.deferred_loss = HistLoss()
         self.train_psnr = PeakSignalNoiseRatio(data_range=1)
         self.val_psnr = PeakSignalNoiseRatio(data_range=1)
         self.val_ssim = StructuralSimilarityIndexMeasure(data_range=1)
@@ -79,6 +77,10 @@ class NeRFSystem(LightningModule):
         rgb_act = 'None' if self.hparams.use_exposure else None
         self.model = NGP(scale=self.hparams.scale, rgb_act=rgb_act)
         # self.model = NeRF(scale=self.hparams.scale, rgb_act=rgb_act)
+
+        self.loss = NeRFLoss(self.model._N_COLOR_CH,
+                             lambda_distortion=self.hparams.distortion_loss_w)
+        self.deferred_loss = HistLoss()
 
     def forward(self, batch, split):
         if split == 'train':
@@ -118,6 +120,7 @@ class NeRFSystem(LightningModule):
         # define additional parameters
         self.register_buffer('directions', self.train_dataset.directions.to(self.device))
         self.register_buffer('poses', self.train_dataset.poses.to(self.device))
+        self.loss.setup_sem_ind(self.train_dataset.sort_sem())
 
         if self.hparams.optimize_ext:
             N = len(self.train_dataset.poses)
@@ -247,10 +250,10 @@ class NeRFSystem(LightningModule):
 
         if not self.hparams.no_save_test:  # save test image to disk
             idx = batch['img_idxs']
-            self.save_image_trans(results['rgb'], f'{idx:03d}.png')
+            self.save_image_trans(results['rgb'][:, :self.model._N_COLOR_CH], f'{idx:03d}.png')
             self.save_depth(results['depth'], f'{idx:03d}_d.png')
             if not self.current_epoch:
-                self.save_image_trans(batch['rgb'], f'{idx:03d}_gt.png')
+                self.save_image_trans(batch['rgb'][:, :self.model._N_COLOR_CH], f'{idx:03d}_gt.png')
 
         return logs
 

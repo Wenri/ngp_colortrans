@@ -153,7 +153,10 @@ class NGPBase(nn.Module):
 
 
 class NGP(NGPBase):
+    _N_COLOR_CH = 5
+
     def __init__(self, scale, rgb_act='Sigmoid'):
+        assert N_CH > self._N_COLOR_CH
         super().__init__(scale=scale)
 
         self.rgb_act = rgb_act
@@ -199,11 +202,23 @@ class NGP(NGPBase):
 
         self.rgb_net = \
             tcnn.Network(
-                n_input_dims=32, n_output_dims=5,
+                n_input_dims=32, n_output_dims=self._N_COLOR_CH,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
                     "output_activation": str(self.rgb_act),
+                    "n_neurons": 64,
+                    "n_hidden_layers": 2,
+                }
+            )
+
+        self.seg_net = \
+            tcnn.Network(
+                n_input_dims=16, n_output_dims=N_CH - self._N_COLOR_CH,
+                network_config={
+                    "otype": "FullyFusedMLP",
+                    "activation": "ReLU",
+                    "output_activation": "None",
                     "n_neurons": 64,
                     "n_hidden_layers": 2,
                 }
@@ -277,7 +292,9 @@ class NGP(NGPBase):
         sigmas, h = self.density(x, return_feat=True)
         d = d / torch.norm(d, dim=1, keepdim=True)
         d = self.dir_encoder((d + 1) / 2)
-        h = torch.cat((d, torch.sigmoid(h[:, :1]), torch.nn.functional.leaky_relu(h[:, 1:])), dim=1)
+        h = torch.cat((torch.sigmoid(h[:, :1]), torch.nn.functional.leaky_relu(h[:, 1:])), dim=1)
+        segs = self.seg_net(h)
+        h = torch.cat((d, h), dim=1)
         rgbs = self.rgb_net(h)
 
         if self.rgb_act is None:
@@ -290,6 +307,7 @@ class NGP(NGPBase):
             else:  # convert to LDR using tonemapper networks
                 rgbs = self.log_radiance_to_rgb(rgbs, **kwargs)
 
+        rgbs = torch.cat((rgbs, segs), -1)
         assert torch.all(torch.isfinite(rgbs))
 
         return sigmas, rgbs

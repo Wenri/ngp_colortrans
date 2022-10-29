@@ -3,6 +3,7 @@ import numpy as np
 from kornia.color import rgb_to_yuv, rgb_to_yuv420
 from kornia.filters import spatial_gradient
 from torch import nn
+import torch.nn.functional as F
 import vren
 from einops import rearrange
 
@@ -91,6 +92,24 @@ class NeRFLoss(nn.Module):
     def setup_sem_ind(self, sem_ind):
         self.register_buffer('sem_ind', sem_ind)
 
+    def _seg_loss(self, results_seg, target_seg):
+        seg = results_seg[..., self._n_color_ch:]
+        n_sem = seg.shape[1] - 1
+        target_seg = torch.softmax(target_seg, dim=1, dtype=torch.float32)
+        target_seg_n = target_seg[..., self.sem_ind[:n_sem]]
+        target_seg_nr = target_seg_n.max(dim=1)
+        target_seg_o = target_seg[..., self.sem_ind[n_sem:]]
+        target_seg_or = torch.sum(target_seg_o, dim=1)
+
+        target_is_n = torch.ge(target_seg_nr.values, target_seg_or)
+        target_idx = torch.where(target_is_n, target_seg_nr.indices, n_sem)
+        target_conf = torch.where(target_is_n, target_seg_nr.values, target_seg_or)
+        ignore = torch.lt(target_conf, 0.5)
+        target_conf[ignore] = 0.
+
+        loss = target_conf * F.cross_entropy(seg, target_idx, reduction='none')
+        return loss * 1e-1
+
     def _lab_loss(self, results_ab, target_ab):
         return self._l1_loss(input=results_ab[..., 3:self._n_color_ch],
                              target=target_ab[..., 3:self._n_color_ch]) * 1e-1
@@ -104,6 +123,7 @@ class NeRFLoss(nn.Module):
         d = {
             'rgb': self._rgb_loss(results_rgb=results['rgb'], target_rgb=target['rgb']),
             'trans': self._lab_loss(results_ab=results['rgb'], target_ab=target['rgb']),
+            'seg': self._seg_loss(results_seg=results['rgb'], target_seg=target['seg']),
             # encourage opacity to be either 0 or 1 to avoid floater
             'opacity': self.lambda_opacity * (-o * torch.log(o)),
         }

@@ -308,6 +308,7 @@ class NGP(NGPBase):
                 rgbs = self.log_radiance_to_rgb(rgbs, **kwargs)
 
         rgbs = torch.cat((rgbs, segs), -1)
-        assert torch.all(torch.isfinite(rgbs))
+        fin_check = torch.isfinite(rgbs)
+        assert fin_check.all(), f'Not all rgbs are finite: {~torch.count_nonzero(fin_check, 0)}'
 
         return sigmas, rgbs

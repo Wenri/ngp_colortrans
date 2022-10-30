@@ -19,7 +19,7 @@ from datasets.ray_utils import axisangle_to_R, get_rays
 
 # models
 from models.networks import NGP
-from models.rendering import render, MAX_SAMPLES
+from models.rendering import render, MAX_SAMPLES, N_CH
 
 # optimizer, losses
 from apex.optimizers import FusedAdam
@@ -56,7 +56,7 @@ def depth2img(depth):
 
 
 class NeRFSystem(LightningModule):
-    def __init__(self, hparams):
+    def __init__(self, hparams, palette=None):
         super().__init__()
         self.val_dir = f'results/{hparams.dataset_name}/{hparams.exp_name}/init'
         os.makedirs(self.val_dir, exist_ok=True)
@@ -80,6 +80,15 @@ class NeRFSystem(LightningModule):
         self.loss = NeRFLoss(self.model._N_COLOR_CH,
                              lambda_distortion=self.hparams.distortion_loss_w)
         self.deferred_loss = HistLoss()
+
+        self.CLASSES = N_CH - self.model._N_COLOR_CH
+
+        if palette is None:
+            palette = np.random.randint(0, 255, size=(self.CLASSES, 3))
+        self.palette = np.asarray(palette)
+        assert palette.shape[0] == self.CLASSES
+        assert palette.shape[1] == 3
+        assert len(palette.shape) == 2
 
     def forward(self, batch, split):
         if split == 'train':
@@ -246,7 +255,9 @@ class NeRFSystem(LightningModule):
 
         if not self.hparams.no_save_test:  # save test image to disk
             idx = batch['img_idxs']
-            self.save_image_trans(results['rgb'][:, :self.model._N_COLOR_CH], f'{idx:03d}.png')
+            self.save_seg(self.save_image_trans(
+                results['rgb'][:, :self.model._N_COLOR_CH], f'{idx:03d}.png'),
+                results['rgb'][:, self.model._N_COLOR_CH:], f'{idx:03d}_s.png')
             self.save_depth(results['depth'], f'{idx:03d}_d.png')
             if not self.current_epoch:
                 self.save_image_trans(batch['rgb'][:, :self.model._N_COLOR_CH], f'{idx:03d}_gt.png')
@@ -277,8 +288,9 @@ class NeRFSystem(LightningModule):
         base, ext = os.path.splitext(name)
         scale = torch.as_tensor((255.0, 128.0, 128.0, 128.0, 128.0), dtype=rays.dtype, device=rays.device)
         L, a, b, ta, tb = torch.unbind(rays * scale, dim=-1)
-        self.save_image(L, a, b, name)
+        img = self.save_image(L, a, b, name)
         self.save_image(L, ta, tb, f'{base}_t{ext}')
+        return img
 
     def save_image(self, L, a, b, name):
         w, h = self.train_dataset.img_wh
@@ -293,11 +305,31 @@ class NeRFSystem(LightningModule):
         srgb_icc = ImageCms.createProfile('sRGB')
         img = ImageCms.profileToProfile(lab, lab_icc, srgb_icc, outputMode='RGB')
         img.save(os.path.join(self.val_dir, name))
+        return np.asarray(img)
 
     def save_depth(self, depth, name):
         w, h = self.train_dataset.img_wh
         depth = depth2img(rearrange(depth.cpu().numpy(), '(h w) -> h w', h=h))
         imageio.imsave(os.path.join(self.val_dir, name), depth)
+        return depth
+
+    def save_seg(self, img, seg_logit, name):
+        w, h = self.train_dataset.img_wh
+        # print(name, seg_logit.min(), seg_logit.max())
+
+        seg = rearrange(seg_logit.argmax(dim=1).cpu().numpy(), '(h w) -> h w', w=w, h=h)
+
+        color_seg = np.zeros((seg.shape[0], seg.shape[1], 3), dtype=np.uint8)
+        for label, color in enumerate(self.palette):
+            color_seg[seg == label, :] = color
+
+        # from IPython import embed; embed(header='debug vis')
+        color_seg = img * 0.5 + color_seg * 0.5
+        color_seg = color_seg.astype(np.uint8)
+
+        # save the results
+        imageio.imsave(os.path.join(self.val_dir, name), color_seg)
+        return color_seg
 
 
 def main(hparams):

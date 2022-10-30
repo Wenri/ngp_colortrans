@@ -104,10 +104,9 @@ class NeRFLoss(nn.Module):
         target_is_n = torch.ge(target_seg_nr.values, target_seg_or)
         target_idx = torch.where(target_is_n, target_seg_nr.indices, n_sem)
         target_conf = torch.where(target_is_n, target_seg_nr.values, target_seg_or)
-        ignore = torch.lt(target_conf, 0.5)
-        target_conf[ignore] = 0.
+        selected = torch.ge(target_conf, 0.5)
 
-        loss = target_conf * F.cross_entropy(seg, target_idx, reduction='none')
+        loss = target_conf[selected] * F.cross_entropy(seg[selected], target_idx[selected], reduction='none')
         return loss * 1e-1
 
     def _lab_loss(self, results_ab, target_ab):

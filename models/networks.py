@@ -155,11 +155,12 @@ class NGPBase(nn.Module):
 class NGP(NGPBase):
     _N_COLOR_CH = 5
 
-    def __init__(self, scale, rgb_act='Sigmoid'):
+    def __init__(self, scale, n_trans_head=1, rgb_act='Sigmoid'):
         assert N_CH > self._N_COLOR_CH
         super().__init__(scale=scale)
 
         self.rgb_act = rgb_act
+        self.n_trans_head = 1
 
         # constants
         L = 16
@@ -215,6 +216,18 @@ class NGP(NGPBase):
         self.seg_net = \
             tcnn.Network(
                 n_input_dims=16, n_output_dims=N_CH - self._N_COLOR_CH,
+                network_config={
+                    "otype": "FullyFusedMLP",
+                    "activation": "ReLU",
+                    "output_activation": "None",
+                    "n_neurons": 64,
+                    "n_hidden_layers": 2,
+                }
+            )
+
+        self.trans_net = \
+            tcnn.Network(
+                n_input_dims=32, n_output_dims=2,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",

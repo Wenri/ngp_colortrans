@@ -87,19 +87,23 @@ class NGPGUI:
         else:
             exp_step_factor = 0
 
+        trans_code = torch.zeros(11, device='cuda')
+        for cls in range(5):
+            trans_code[cls] = dpg.get_value(f'_c{cls}')
         results = render(self.model, rays_o, rays_d,
                          **{'test_time': True,
                             # 'to_cpu': True, 'to_numpy': True,
                             'T_threshold': 1e-2,
                             # 'exposure': torch.cuda.FloatTensor([dpg.get_value('_exposure')]),
                             'max_samples': 100,
+                            'trans_net_p1': trans_code,
                             'exp_step_factor': exp_step_factor})
 
-        scale = torch.as_tensor((100.0, 128.0, 128.0, 128.0, 128.0), dtype=results["rgb"].dtype,
+        scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=results["rgb"].dtype,
                                 device=results["rgb"].device)
-        rgb = results["rgb"] * scale
-        rgb = torch.concat((rgb[:, :1], rgb[:, 3:]), dim=1)
-        rgb = lab_to_rgb(rearrange(rgb, "(h w) c -> 1 c h w", h=self.H))
+        rgb = results["rgb"]
+        rgb = torch.concat((rgb[:, :1], rgb[:, 3:5]), dim=1)
+        rgb = lab_to_rgb(rearrange(rgb * scale, "(h w) c -> 1 c h w", h=self.H))
         rgb = np.ascontiguousarray(rearrange(rgb.squeeze(0), "c h w -> h w c").cpu().numpy())
         if not NGPGUI._DEBUG_TRIG:
             plt.imshow(rgb)
@@ -138,8 +142,9 @@ class NGPGUI:
 
         ## control window ##
         with dpg.window(label="Control", tag="_control_window", width=200, height=150):
-            dpg.add_slider_float(label="exposure", default_value=0.2,
-                                 min_value=1 / 60, max_value=32, tag="_exposure")
+            for cls in range(5):
+                dpg.add_slider_float(label=f"c{cls}", default_value=0,
+                                     min_value=-2, max_value=2, tag=f"_c{cls}")
             dpg.add_button(label="show depth", tag="_button_depth",
                            callback=callback_depth)
             dpg.add_separator()

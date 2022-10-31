@@ -80,7 +80,7 @@ class NeRFSystem(LightningModule):
         self.loss = NeRFLoss(self.model.n_total_color_ch, lambda_distortion=self.hparams.distortion_loss_w)
         self.deferred_loss = HistLoss()
 
-        N_CLASSES = N_CH - self.model._N_COLOR_CH
+        N_CLASSES = N_CH - self.model.n_total_color_ch
 
         if palette is None:
             palette = np.random.randint(0, 255, size=(N_CLASSES, 3))

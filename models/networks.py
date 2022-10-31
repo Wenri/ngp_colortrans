@@ -160,9 +160,12 @@ class NGP(NGPBase):
         self.rgb_act = rgb_act
         self.n_trans_head = n_trans_head
         self.n_total_color_ch = 2 * n_trans_head + 1
+        self.n_total_sem_ch = N_CH - self.n_total_color_ch
         assert N_CH > self.n_total_color_ch
 
         # constants
+        N_AUX_CH = 13
+        N_XYZ_CH = 16
         L = 16
         F = 2
         log2_T = 19
@@ -172,7 +175,7 @@ class NGP(NGPBase):
 
         self.xyz_encoder = \
             tcnn.NetworkWithInputEncoding(
-                n_input_dims=3, n_output_dims=16,
+                n_input_dims=3, n_output_dims=N_XYZ_CH,
                 encoding_config={
                     "otype": "Grid",
                     "type": "Hash",
@@ -203,11 +206,11 @@ class NGP(NGPBase):
 
         self.rgb_net = \
             tcnn.Network(
-                n_input_dims=32, n_output_dims=5,
+                n_input_dims=16 + N_XYZ_CH, n_output_dims=3 + N_AUX_CH,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
-                    "output_activation": str(self.rgb_act),
+                    "output_activation": "None",
                     "n_neurons": 64,
                     "n_hidden_layers": 2,
                 }
@@ -215,7 +218,7 @@ class NGP(NGPBase):
 
         self.seg_net = \
             tcnn.Network(
-                n_input_dims=16, n_output_dims=N_CH - self.n_total_color_ch,
+                n_input_dims=3 + N_AUX_CH, n_output_dims=self.n_total_sem_ch,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
@@ -227,7 +230,7 @@ class NGP(NGPBase):
 
         self.trans_net = \
             tcnn.Network(
-                n_input_dims=13, n_output_dims=2,
+                n_input_dims=2 + N_AUX_CH + self.n_total_sem_ch, n_output_dims=2,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
@@ -299,17 +302,13 @@ class NGP(NGPBase):
         rgbs = torch.cat(out, 1)
         return rgbs
 
-    def multi_trans(self, ruv, rt, segs, **kwargs):
-        ret = []
-        for head_idx in range(self.n_trans_head):
-            head_name = f'trans_net_p{head_idx}'
-            x = kwargs.get(head_name, getattr(self, head_name))
-            x = x.unsqueeze(0).expand_as(segs) * torch.softmax(segs, dim=1)
-            x = torch.cat([rt, x], 1)
-            x = self.trans_net(x)
-            x = torch.tanh(ruv + x)
-            ret.append(x)
-        return torch.cat(ret, dim=1)
+    def multi_trans(self, ruv, aux, segs, head_idx, **kwargs):
+        head_name = f'trans_net_p{head_idx}'
+        x = kwargs.get(head_name, getattr(self, head_name))
+        x = x.unsqueeze(0).expand_as(segs) * torch.softmax(segs, dim=1)
+        x = torch.cat([ruv, aux, x], 1)
+        x = self.trans_net(x)
+        return x
 
     def forward(self, x, d, **kwargs):
         """
@@ -324,23 +323,23 @@ class NGP(NGPBase):
         sigmas, h = self.density(x, return_feat=True)
         d = d / torch.norm(d, dim=1, keepdim=True)
         d = self.dir_encoder((d + 1) / 2)
-        h = torch.cat((torch.sigmoid(h[:, :1]), torch.nn.functional.leaky_relu(h[:, 1:])), dim=1)
-        segs = self.seg_net(h)
-        h = torch.cat((d, h), dim=1)
-        rgbs = self.rgb_net(h)
-
+        h0, h = torch.sigmoid(h[:, :1]), torch.nn.functional.leaky_relu(h[:, 1:])
+        rgbs = self.rgb_net(torch.cat((d, h0, h), dim=1))
+        ry, ruv, aux = rgbs[..., :1], rgbs[..., 1:3], torch.nn.functional.leaky_relu(rgbs[..., 3:])
         if self.rgb_act is None:
-            ry, ruv, rt = rgbs[..., :1], rgbs[..., 1:3], rgbs[..., 3:]
-            ry, rt = torch.sigmoid(ry), torch.nn.functional.leaky_relu(rt)
-            rt = self.multi_trans(ruv, rt, segs, **kwargs)
-            rgbs = torch.cat((ry, rt), -1)
-        elif self.rgb_act == 'None':  # rgbs is log-radiance
+            ry = torch.sigmoid(ry)
+        rt = torch.tanh(ruv)
+        segs = self.seg_net(torch.cat((ry, rt, aux), dim=1))
+        rt = [ruv + self.multi_trans(rt, aux, segs, head_idx, **kwargs) for head_idx in range(self.n_trans_head)]
+        rt = torch.tanh(torch.cat(rt, -1))
+        rgbs = torch.cat((ry, rt, segs), -1)
+
+        if self.rgb_act == 'None':  # rgbs is log-radiance
             if kwargs.get('output_radiance', False):  # output HDR map
                 rgbs = TruncExp.apply(rgbs)
             else:  # convert to LDR using tonemapper networks
                 rgbs = self.log_radiance_to_rgb(rgbs, **kwargs)
 
-        rgbs = torch.cat((rgbs, segs), -1)
         fin_check = torch.isfinite(rgbs)
         assert fin_check.all(), f'Not all rgbs are finite: {~torch.count_nonzero(fin_check, 0)}'
 

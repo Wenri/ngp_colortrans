@@ -58,6 +58,7 @@ class OrbitCamera:
 
 class NGPGUI:
     _DEBUG_TRIG = False
+    _N_CLS = 11
 
     def __init__(self, hparams, K, img_wh, radius=2.5):
         self.hparams = hparams
@@ -88,7 +89,7 @@ class NGPGUI:
             exp_step_factor = 0
 
         trans_code = torch.zeros(11, device='cuda')
-        for cls in range(5):
+        for cls in range(NGPGUI._N_CLS):
             trans_code[cls] = dpg.get_value(f'_c{cls}')
         results = render(self.model, rays_o, rays_d,
                          **{'test_time': True,
@@ -99,9 +100,8 @@ class NGPGUI:
                             'trans_net_p1': trans_code,
                             'exp_step_factor': exp_step_factor})
 
-        scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=results["rgb"].dtype,
-                                device=results["rgb"].device)
         rgb = results["rgb"]
+        scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=rgb.dtype, device=rgb.device)
         rgb = torch.concat((rgb[:, :1], rgb[:, 3:5]), dim=1)
         rgb = lab_to_rgb(rearrange(rgb * scale, "(h w) c -> 1 c h w", h=self.H))
         rgb = np.ascontiguousarray(rearrange(rgb.squeeze(0), "c h w -> h w c").cpu().numpy())
@@ -142,8 +142,8 @@ class NGPGUI:
 
         ## control window ##
         with dpg.window(label="Control", tag="_control_window", width=200, height=150):
-            for cls in range(5):
-                dpg.add_slider_float(label=f"c{cls}", default_value=0,
+            for cls in range(NGPGUI._N_CLS):
+                dpg.add_slider_float(label=f"c{cls}", default_value=self.model.trans_net_p1[cls].item(),
                                      min_value=-2, max_value=2, tag=f"_c{cls}")
             dpg.add_button(label="show depth", tag="_button_depth",
                            callback=callback_depth)

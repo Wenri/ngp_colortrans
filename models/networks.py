@@ -155,12 +155,13 @@ class NGPBase(nn.Module):
 class NGP(NGPBase):
     _N_COLOR_CH = 5
 
-    def __init__(self, scale, n_trans_head=1, rgb_act='Sigmoid'):
+    def __init__(self, scale, n_trans_head=2, rgb_act='Sigmoid'):
         assert N_CH > self._N_COLOR_CH
         super().__init__(scale=scale)
 
         self.rgb_act = rgb_act
-        self.n_trans_head = 1
+        self.n_trans_head = n_trans_head
+        self.n_total_color_ch = 2 * n_trans_head + 3
 
         # constants
         L = 16
@@ -227,7 +228,7 @@ class NGP(NGPBase):
 
         self.trans_net = \
             tcnn.Network(
-                n_input_dims=32, n_output_dims=2,
+                n_input_dims=13, n_output_dims=2,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
@@ -236,6 +237,13 @@ class NGP(NGPBase):
                     "n_hidden_layers": 2,
                 }
             )
+
+        for head_idx in range(n_trans_head):
+            head_name = f'trans_net_p{head_idx}'
+            if head_idx:
+                self.register_parameter(head_name, nn.Parameter(torch.rand(N_CH - self._N_COLOR_CH)))
+            else:
+                self.register_buffer(head_name, torch.zeros(N_CH - self._N_COLOR_CH), persistent=False)
 
         if self.rgb_act == 'None':  # rgb_net output is log-radiance
             for i in range(3):  # independent tonemappers for r,g,b
@@ -292,6 +300,19 @@ class NGP(NGPBase):
         rgbs = torch.cat(out, 1)
         return rgbs
 
+    def multi_trans(self, rt, segs):
+        ret = []
+        for head_idx in range(self.n_trans_head):
+            head_name = f'trans_net_p{head_idx}'
+            x = getattr(self, head_name)[None, :]
+            x = x.expand_as(segs) * torch.softmax(segs, dim=1)
+            x = torch.cat([rt, x], 1)
+            x = self.trans_net(x)
+            x = torch.tanh(x)
+            ret.append(x)
+            print(head_name)
+        return torch.cat(ret, dim=1)
+
     def forward(self, x, d, **kwargs):
         """
         Inputs:
@@ -312,7 +333,8 @@ class NGP(NGPBase):
 
         if self.rgb_act is None:
             ry, ruv, rt = rgbs[..., :1], rgbs[..., 1:3], rgbs[..., 3:]
-            ry, ruv, rt = torch.sigmoid(ry), torch.tanh(ruv), torch.tanh(rt)
+            ry, ruv, rt = torch.sigmoid(ry), torch.tanh(ruv), torch.nn.functional.leaky_relu(rt)
+            rt = self.multi_trans(rt, segs)
             rgbs = torch.cat((ry, ruv, rt), -1)
         elif self.rgb_act == 'None':  # rgbs is log-radiance
             if kwargs.get('output_radiance', False):  # output HDR map

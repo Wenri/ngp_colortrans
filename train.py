@@ -77,16 +77,15 @@ class NeRFSystem(LightningModule):
         self.model = NGP(scale=self.hparams.scale, rgb_act=rgb_act)
         # self.model = NeRF(scale=self.hparams.scale, rgb_act=rgb_act)
 
-        self.loss = NeRFLoss(self.model._N_COLOR_CH,
-                             lambda_distortion=self.hparams.distortion_loss_w)
+        self.loss = NeRFLoss(self.model.n_total_color_ch, lambda_distortion=self.hparams.distortion_loss_w)
         self.deferred_loss = HistLoss()
 
-        self.CLASSES = N_CH - self.model._N_COLOR_CH
+        N_CLASSES = N_CH - self.model._N_COLOR_CH
 
         if palette is None:
-            palette = np.random.randint(0, 255, size=(self.CLASSES, 3))
+            palette = np.random.randint(0, 255, size=(N_CLASSES, 3))
         self.palette = np.asarray(palette)
-        assert palette.shape[0] == self.CLASSES
+        assert palette.shape[0] == N_CLASSES
         assert palette.shape[1] == 3
         assert len(palette.shape) == 2
 
@@ -256,11 +255,11 @@ class NeRFSystem(LightningModule):
         if not self.hparams.no_save_test:  # save test image to disk
             idx = batch['img_idxs']
             self.save_seg(self.save_image_trans(
-                results['rgb'][:, :self.model._N_COLOR_CH], f'{idx:03d}.png'),
-                results['rgb'][:, self.model._N_COLOR_CH:], f'{idx:03d}_s.png')
+                results['rgb'][:, :self.model.n_total_color_ch], f'{idx:03d}.png'),
+                results['rgb'][:, self.model.n_total_color_ch:], f'{idx:03d}_s.png')
             self.save_depth(results['depth'], f'{idx:03d}_d.png')
             if not self.current_epoch:
-                self.save_image_trans(batch['rgb'][:, :self.model._N_COLOR_CH], f'{idx:03d}_gt.png')
+                self.save_image_trans(batch['rgb'][:, :self.model.n_total_color_ch], f'{idx:03d}_gt.png')
 
         return logs
 

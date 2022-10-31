@@ -110,8 +110,16 @@ class NeRFLoss(nn.Module):
         return loss * 1e-1
 
     def _lab_loss(self, results_ab, target_ab):
-        return self._l1_loss(input=results_ab[..., 3:self._n_color_ch],
-                             target=target_ab[..., 3:self._n_color_ch]) * 1e-1
+        weight = 1e-1
+        results_ab = results_ab[..., 3:self._n_color_ch]
+        target_ab = target_ab[..., 1:]
+        loss = self._l1_loss(input=results_ab[..., :2],
+                             target=target_ab[..., :2]) * weight
+        n_ch = 2
+        for idx in range(2, results_ab.shape[1], n_ch):
+            loss += self._l1_loss(input=results_ab[..., idx:idx + n_ch],
+                                  target=target_ab[..., idx:idx + n_ch]) * weight
+        return loss
 
     def _rgb_loss(self, results_rgb, target_rgb):
         return self._l2_loss(input=results_rgb[..., :3], target=target_rgb[..., :3])

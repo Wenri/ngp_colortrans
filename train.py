@@ -127,7 +127,9 @@ class NeRFSystem(LightningModule):
         # define additional parameters
         self.register_buffer('directions', self.train_dataset.directions.to(self.device))
         self.register_buffer('poses', self.train_dataset.poses.to(self.device))
-        self.loss.setup_sem_ind(self.train_dataset.sort_sem())
+        self.loss.setup_sem_ind(self.train_dataset.sort_sem().to(self.device),
+                                self.train_dataset.ref_points.to(self.device),
+                                self.train_dataset.flow.to(self.device))
 
         if self.hparams.optimize_ext:
             N = len(self.train_dataset.poses)

@@ -42,8 +42,7 @@ class BaseDataset(Dataset):
         # randomly select pixels
         pix_idxs = np.random.choice(self.img_wh[0] * self.img_wh[1], self.batch_size)
         rays = self.rays[img_idxs, pix_idxs]
-        sample = {'img_idxs': img_idxs, 'pix_idxs': pix_idxs,
-                  'rgb': rays[:, :]}
+        sample = {'img_idxs': img_idxs, 'pix_idxs': pix_idxs, 'rgb': rays[:, :]}
         if self.segs is not None:
             sample['seg'] = self.segs[img_idxs, pix_idxs]
         if self.rays.shape[-1] == 4:  # HDR-NeRF data

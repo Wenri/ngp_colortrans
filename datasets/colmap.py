@@ -24,7 +24,7 @@ def _read_coeffs(name):
     V = np.resize(to_points, (len(to_points) + 3, 2))
     V[-3:, :] = 0
     coeffs = np.linalg.lstsq(L, V, rcond=None)  # np.dot(np.linalg.pinv(L), V)
-    return from_points, coeffs[0]
+    return d, coeffs[0]
 
 
 class ColmapDataset(BaseDataset):
@@ -36,8 +36,11 @@ class ColmapDataset(BaseDataset):
 
         self.read_intrinsics()
         try:
-            from_points, coeffs = _read_coeffs('assets/transimg.npz')
-            self.from_points = torch.from_numpy(from_points)
+            d, coeffs = _read_coeffs('assets/transimg.npz')
+            self.from_points = torch.from_numpy(d['from_points'])
+            self.to_points = torch.from_numpy(d['to_points'])
+            self.ref_points = torch.from_numpy(d['ref_points'])
+            self.flow = torch.from_numpy(d['flow'])
             self._coeffs = torch.from_numpy(coeffs)
         except Exception as e:
             self.log.exception('From/To points not found. Assuming no warp.')
@@ -59,7 +62,7 @@ class ColmapDataset(BaseDataset):
         distances = (w * distances).sum(axis=-1)
         return a1 + ax * x + ay * y + distances
 
-    def _trans_ab(self, img, skip=False):
+    def _trans_ab(self, img, skip=True):
         a, b = torch.unbind(img[..., 1:], dim=1)
         if not skip:
             a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)

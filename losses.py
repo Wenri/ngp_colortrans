@@ -88,9 +88,12 @@ class NeRFLoss(nn.Module):
         self._l1_loss = torch.nn.HuberLoss(reduction='none', delta=0.1)
         self._l2_loss = torch.nn.MSELoss(reduction='none')
         self._n_color_ch = n_color_ch
+        self.trans_w = torch.nn.Linear(826, 2)
 
-    def setup_sem_ind(self, sem_ind):
+    def setup_sem_ind(self, sem_ind, ref_points, flow):
         self.register_buffer('sem_ind', sem_ind)
+        self.register_buffer('ref_points', ref_points)
+        self.register_buffer('flow', flow)
 
     def _seg_loss(self, results_seg, target_seg):
         seg = results_seg[..., self._n_color_ch:]
@@ -116,8 +119,14 @@ class NeRFLoss(nn.Module):
         target_ab = target_ab[..., 3:]
         loss = []
         for idx in range(0, results_ab.shape[1], n_ch):
-            loss.append(self._l1_loss(input=results_ab[..., idx:idx + n_ch],
-                                      target=target_ab[..., idx:idx + n_ch]) * weight)
+            # loss.append(self._l1_loss(input=results_ab[..., idx:idx + n_ch],
+            #                           target=target_ab[..., idx:idx + n_ch]) * weight)
+            distance = rearrange(results_ab[..., idx:idx + n_ch], 'b c -> b 1 c') - self.ref_points
+            distance = torch.sum(torch.square(distance), dim=-1)
+            flowd = torch.matmul(distance, self.flow).to(dtype=torch.float32)
+            flowd = flowd / torch.sum(self.flow, dim=0)
+            loss.append(self._l2_loss(self.trans_w(flowd), target=target_ab[..., idx:idx + n_ch]) * weight)
+
         return torch.cat(loss, dim=1)
 
     def _rgb_loss(self, results_rgb, target_rgb):

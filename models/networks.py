@@ -218,7 +218,7 @@ class NGP(NGPBase):
 
         self.seg_net = \
             tcnn.Network(
-                n_input_dims=3 + N_AUX_CH, n_output_dims=self.n_total_sem_ch,
+                n_input_dims=N_XYZ_CH, n_output_dims=self.n_total_sem_ch,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
@@ -230,7 +230,7 @@ class NGP(NGPBase):
 
         self.trans_net = \
             tcnn.Network(
-                n_input_dims=2 + N_AUX_CH + self.n_total_sem_ch, n_output_dims=2,
+                n_input_dims=N_AUX_CH + self.n_total_sem_ch, n_output_dims=2,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
@@ -302,11 +302,11 @@ class NGP(NGPBase):
         rgbs = torch.cat(out, 1)
         return rgbs
 
-    def multi_trans(self, ruv, aux, segs, head_idx, **kwargs):
+    def multi_trans(self, aux, segs, head_idx, **kwargs):
         head_name = f'trans_net_p{head_idx}'
         x = kwargs.get(head_name, getattr(self, head_name))
         x = x.unsqueeze(0).expand_as(segs) * torch.softmax(segs, dim=1)
-        x = torch.cat([ruv, aux, x], 1)
+        x = torch.cat([aux, x], 1)
         x = self.trans_net(x)
         return x
 
@@ -326,15 +326,14 @@ class NGP(NGPBase):
         h0, h = torch.sigmoid(h[:, :1]), torch.nn.functional.leaky_relu(h[:, 1:])
         rgbs = self.rgb_net(torch.cat((d, h0, h), dim=1))
         ry, ruv, aux = rgbs[..., :1], rgbs[..., 1:3], torch.nn.functional.leaky_relu(rgbs[..., 3:])
+        segs = self.seg_net(torch.cat((h0, h), dim=1))
+        rt = [ruv + self.multi_trans(aux, segs, head_idx, **kwargs) for head_idx in range(self.n_trans_head)]
+        rt = torch.tanh(torch.cat(rt, -1))
+
         if self.rgb_act is None:
             ry = torch.sigmoid(ry)
-        rt = torch.tanh(ruv)
-        segs = self.seg_net(torch.cat((ry, rt, aux), dim=1))
-        rt = [ruv + self.multi_trans(rt, aux, segs, head_idx, **kwargs) for head_idx in range(self.n_trans_head)]
-        rt = torch.tanh(torch.cat(rt, -1))
-        rgbs = torch.cat((ry, rt, segs), -1)
-
-        if self.rgb_act == 'None':  # rgbs is log-radiance
+            rgbs = torch.cat((ry, rt, segs), -1)
+        elif self.rgb_act == 'None':  # rgbs is log-radiance
             if kwargs.get('output_radiance', False):  # output HDR map
                 rgbs = TruncExp.apply(rgbs)
             else:  # convert to LDR using tonemapper networks

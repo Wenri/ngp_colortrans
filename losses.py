@@ -123,8 +123,8 @@ class NeRFLoss(nn.Module):
             #                           target=target_ab[..., idx:idx + n_ch]) * weight)
             distance = rearrange(results_ab[..., idx:idx + n_ch], 'b c -> b 1 c') - self.ref_points
             distance = torch.sum(torch.square(distance), dim=-1)
-            flowd = torch.matmul(distance, self.flow).to(dtype=torch.float32)
-            flowd = flowd / torch.sum(self.flow, dim=0)
+            flowd = torch.matmul(distance, self.flow)
+            flowd = (flowd / torch.sum(self.flow, dim=0)).to(dtype=torch.float32)
             loss.append(self._l2_loss(self.trans_w(flowd), target=target_ab[..., idx:idx + n_ch]) * weight)
 
         return torch.cat(loss, dim=1)

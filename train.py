@@ -125,6 +125,7 @@ class NeRFSystem(LightningModule):
         self.loss.setup_sem_ind(self.train_dataset.sort_sem().to(self.device),
                                 self.train_dataset.from_points.to(self.device, dtype=torch.float64),
                                 self.train_dataset.to_points.to(self.device, dtype=torch.float64),
+                                self.train_dataset.ref_points.to(self.device, dtype=torch.float64),
                                 self.train_dataset.flow.to(self.device, dtype=torch.float64),
                                 self.train_dataset.rev_coeffs.to(self.device, dtype=torch.float64))
 

@@ -84,12 +84,13 @@ class NeRFLoss(nn.Module):
         self._l1_loss = torch.nn.HuberLoss(reduction='none', delta=0.1)
         self._l2_loss = torch.nn.MSELoss(reduction='none')
         self._n_color_ch = n_color_ch
-        # self.trans_w = torch.nn.Linear(826, 2)
+        self.trans_w = torch.nn.Linear(826, 2)
 
-    def setup_sem_ind(self, sem_ind, from_points, to_points, flow, coeffs):
+    def setup_sem_ind(self, sem_ind, from_points, to_points, ref_points, flow, coeffs):
         self.register_buffer('sem_ind', sem_ind)
         self.register_buffer('from_points', from_points)
         self.register_buffer('to_points', to_points)
+        self.register_buffer('ref_points', ref_points)
         self.register_buffer('flow', flow)
         self.register_buffer('coeffs', coeffs)
 
@@ -136,13 +137,13 @@ class NeRFLoss(nn.Module):
         for idx in range(0, results_ab.shape[1], n_ch):
             # loss.append(self._l1_loss(input=results_ab[..., idx:idx + n_ch],
             #                           target=target_ab[..., idx:idx + n_ch]) * weight)
-            # ref_ab = self._trans_ab(target_ab[..., idx:idx + n_ch]).to(dtype=results_ab.dtype)
-            rt = self._trans_ab(results_ab[..., idx:idx + n_ch]).to(dtype=target_ab.dtype)
-            # distance = rearrange(results_ab[..., idx:idx + n_ch], 'b c -> b 1 c') - self.to_points
+            # distance = rearrange(results_ab[..., idx:idx + n_ch], 'b c -> b 1 c') - self.ref_points
             # distance = torch.sum(torch.square(distance), dim=-1)
             # flowd = torch.matmul(distance, self.flow)
-            # flowd = flowd / torch.sum(self.flow, dim=0)
-            loss.append(self._l1_loss(rt, target=target_ab[..., idx:idx + n_ch]) * weight)
+            # flowd = self._U(flowd / torch.sum(self.flow, dim=0)).to(dtype=torch.float32)
+            distance = rearrange(results_ab[..., idx:idx + n_ch], 'b c -> b 1 c') - self.to_points
+            distance = self._U(torch.sum(torch.square(distance), dim=-1)).to(dtype=torch.float32)
+            loss.append(self._l2_loss(self.trans_w(distance), target=target_ab[..., idx:idx + n_ch]) * weight)
 
         return torch.cat(loss, dim=1)
 

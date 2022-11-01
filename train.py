@@ -1,31 +1,28 @@
+import glob
+import os
+import warnings
 from typing import Optional
 
-import torch
-from PIL import ImageCms
-from PIL import Image
-from kornia.color import lab_to_rgb
-from torch import nn
-from opt import get_opts
-import os
-import glob
+import cv2
 import imageio
 import numpy as np
-import cv2
-from einops import rearrange
-# data
-from torch.utils.data import DataLoader
-from datasets import dataset_dict
-from datasets.ray_utils import axisangle_to_R, get_rays
-
-# models
-from models.networks import NGP
-from models.rendering import render, MAX_SAMPLES, N_CH
-
+import torch
+from PIL import Image
+from PIL import ImageCms
 # optimizer, losses
 from apex.optimizers import FusedAdam
+from einops import rearrange
+from kornia.color import lab_to_rgb
+from pytorch_lightning import LightningModule, Trainer
+from pytorch_lightning.callbacks import TQDMProgressBar, ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
+# pytorch-lightning
+from pytorch_lightning.plugins import DDPPlugin
+from pytorch_lightning.utilities.distributed import all_gather_ddp_if_available
+from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from losses import NeRFLoss, HistLoss
-
+# data
+from torch.utils.data import DataLoader
 # metrics
 from torchmetrics import (
     PeakSignalNoiseRatio,
@@ -33,16 +30,14 @@ from torchmetrics import (
 )
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
-# pytorch-lightning
-from pytorch_lightning.plugins import DDPPlugin
-from pytorch_lightning import LightningModule, Trainer
-from pytorch_lightning.callbacks import TQDMProgressBar, ModelCheckpoint
-from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.utilities.distributed import all_gather_ddp_if_available
-
+from datasets import dataset_dict
+from datasets.ray_utils import axisangle_to_R, get_rays
+from losses import NeRFLoss, HistLoss
+# models
+from models.networks import NGP
+from models.rendering import render, MAX_SAMPLES, N_CH
+from opt import get_opts
 from utils import slim_ckpt, load_ckpt
-
-import warnings
 
 warnings.filterwarnings("ignore")
 
@@ -128,8 +123,10 @@ class NeRFSystem(LightningModule):
         self.register_buffer('directions', self.train_dataset.directions.to(self.device))
         self.register_buffer('poses', self.train_dataset.poses.to(self.device))
         self.loss.setup_sem_ind(self.train_dataset.sort_sem().to(self.device),
-                                self.train_dataset.ref_points.to(self.device),
-                                self.train_dataset.flow.to(self.device))
+                                self.train_dataset.from_points.to(self.device, dtype=torch.float64),
+                                self.train_dataset.to_points.to(self.device, dtype=torch.float64),
+                                self.train_dataset.flow.to(self.device, dtype=torch.float64),
+                                self.train_dataset.rev_coeffs.to(self.device, dtype=torch.float64))
 
         if self.hparams.optimize_ext:
             N = len(self.train_dataset.poses)

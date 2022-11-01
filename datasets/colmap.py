@@ -1,30 +1,25 @@
-import logging
-
-import torch
-import numpy as np
-import os
 import glob
+import logging
+import os
+
+import numpy as np
+import torch
 from tqdm import tqdm
 
 from misc.imagewrap import _make_L_matrix
-from .ray_utils import *
-from .color_utils import read_image
-from .colmap_utils import \
-    read_cameras_binary, read_images_binary, read_points3d_binary
-
 from .base import BaseDataset
+from .colmap_utils import read_cameras_binary, read_images_binary, read_points3d_binary
+from .color_utils import read_image
+from .ray_utils import get_ray_directions, center_poses, create_spheric_poses
 from .seg_util import read_seg
 
 
-def _read_coeffs(name):
-    d = np.load(name)
-    from_points = d['from_points']
-    to_points = d['to_points']
+def _calc_coeffs(from_points, to_points):
     L = _make_L_matrix(from_points)
     V = np.resize(to_points, (len(to_points) + 3, 2))
     V[-3:, :] = 0
     coeffs = np.linalg.lstsq(L, V, rcond=None)  # np.dot(np.linalg.pinv(L), V)
-    return d, coeffs[0]
+    return coeffs[0]
 
 
 class ColmapDataset(BaseDataset):
@@ -36,16 +31,20 @@ class ColmapDataset(BaseDataset):
 
         self.read_intrinsics()
         try:
-            d, coeffs = _read_coeffs('assets/transimg.npz')
-            self.from_points = torch.from_numpy(d['from_points'])
-            self.to_points = torch.from_numpy(d['to_points'])
-            self.ref_points = torch.from_numpy(d['ref_points'])
+            d = np.load('assets/transimg.npz')
+            from_points = d['from_points'] / 128.
+            to_points = d['to_points'] / 128.
+            ref_points = d['ref_points'] / 128.
+            self.from_points = torch.from_numpy(from_points)
+            self.to_points = torch.from_numpy(to_points)
+            self.ref_points = torch.from_numpy(ref_points)
             self.flow = torch.from_numpy(d['flow'])
-            self._coeffs = torch.from_numpy(coeffs)
+            self.coeffs = torch.from_numpy(_calc_coeffs(from_points, to_points))
+            self.rev_coeffs = torch.from_numpy(_calc_coeffs(to_points, from_points))
         except Exception as e:
             self.log.exception('From/To points not found. Assuming no warp.')
             self.from_points = None
-            self._coeffs = None
+            self.coeffs = None
 
         if kwargs.get('read_meta', True):
             self.read_meta(split, **kwargs)
@@ -65,7 +64,7 @@ class ColmapDataset(BaseDataset):
     def _trans_ab(self, img, skip=True):
         a, b = torch.unbind(img[..., 1:], dim=1)
         if not skip:
-            a, b = self._calculate_f(self._coeffs[:, 0], a, b), self._calculate_f(self._coeffs[:, 1], a, b)
+            a, b = self._calculate_f(self.coeffs[:, 0], a, b), self._calculate_f(self.coeffs[:, 1], a, b)
         return torch.stack((a, b), dim=1)
 
     def _img_trans(self, img: torch.Tensor, scale=(255., 128., 128.)):

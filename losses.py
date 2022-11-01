@@ -1,15 +1,11 @@
 import torch
-import numpy as np
-from kornia.color import rgb_to_yuv, rgb_to_yuv420
-from kornia.filters import spatial_gradient
-from torch import nn
 import torch.nn.functional as F
 import vren
 from einops import rearrange
+from kornia.filters import spatial_gradient
+from torch import nn
 
-from misc.differentiable_histogram import GaussianHistogram, MultivariateGaussianHistogram
-from misc.imagewrap import _make_L_matrix
-from misc.rgb_lab_formulation_pytorch import rgb_to_lab
+from misc.differentiable_histogram import MultivariateGaussianHistogram
 
 
 class DistortionLoss(torch.autograd.Function):
@@ -78,7 +74,7 @@ class HistLoss(nn.Module):
 
 
 class NeRFLoss(nn.Module):
-    _EPS = torch.finfo(torch.float32).eps
+    _EPSILON = torch.finfo(torch.float32).eps
 
     def __init__(self, n_color_ch, lambda_opacity=1e-3, lambda_distortion=1e-3):
         super().__init__()
@@ -88,12 +84,31 @@ class NeRFLoss(nn.Module):
         self._l1_loss = torch.nn.HuberLoss(reduction='none', delta=0.1)
         self._l2_loss = torch.nn.MSELoss(reduction='none')
         self._n_color_ch = n_color_ch
-        self.trans_w = torch.nn.Linear(826, 2)
+        # self.trans_w = torch.nn.Linear(826, 2)
 
-    def setup_sem_ind(self, sem_ind, ref_points, flow):
+    def setup_sem_ind(self, sem_ind, from_points, to_points, flow, coeffs):
         self.register_buffer('sem_ind', sem_ind)
-        self.register_buffer('ref_points', ref_points)
+        self.register_buffer('from_points', from_points)
+        self.register_buffer('to_points', to_points)
         self.register_buffer('flow', flow)
+        self.register_buffer('coeffs', coeffs)
+
+    def _U(self, x: torch.Tensor):
+        return x * torch.where(torch.lt(x, self._EPSILON), 0., torch.log(x) / 2)
+
+    def _calculate_f(self, coeffs, x, y):
+        w = coeffs[:-3]
+        a1, ax, ay = coeffs[-3:]
+        # The following may use too much RAM:
+        points = self.to_points.to(dtype=torch.float64)
+        distances = self._U(torch.square(points[:, 0] - x[..., None]) + torch.square(points[:, 1] - y[..., None]))
+        distances = (w * distances).sum(axis=-1)
+        return a1 + ax * x + ay * y + distances
+
+    def _trans_ab(self, img):
+        a, b = torch.unbind(img, dim=1)
+        a, b = self._calculate_f(self.coeffs[:, 0], a, b), self._calculate_f(self.coeffs[:, 1], a, b)
+        return torch.stack((a, b), dim=1)
 
     def _seg_loss(self, results_seg, target_seg):
         seg = results_seg[..., self._n_color_ch:]
@@ -121,11 +136,13 @@ class NeRFLoss(nn.Module):
         for idx in range(0, results_ab.shape[1], n_ch):
             # loss.append(self._l1_loss(input=results_ab[..., idx:idx + n_ch],
             #                           target=target_ab[..., idx:idx + n_ch]) * weight)
-            distance = rearrange(results_ab[..., idx:idx + n_ch], 'b c -> b 1 c') - self.ref_points
-            distance = torch.sum(torch.square(distance), dim=-1)
-            flowd = torch.matmul(distance, self.flow)
-            flowd = (flowd / torch.sum(self.flow, dim=0)).to(dtype=torch.float32)
-            loss.append(self._l2_loss(self.trans_w(flowd), target=target_ab[..., idx:idx + n_ch]) * weight)
+            # ref_ab = self._trans_ab(target_ab[..., idx:idx + n_ch]).to(dtype=results_ab.dtype)
+            rt = self._trans_ab(results_ab[..., idx:idx + n_ch]).to(dtype=target_ab.dtype)
+            # distance = rearrange(results_ab[..., idx:idx + n_ch], 'b c -> b 1 c') - self.to_points
+            # distance = torch.sum(torch.square(distance), dim=-1)
+            # flowd = torch.matmul(distance, self.flow)
+            # flowd = flowd / torch.sum(self.flow, dim=0)
+            loss.append(self._l1_loss(rt, target=target_ab[..., idx:idx + n_ch]) * weight)
 
         return torch.cat(loss, dim=1)
 
@@ -133,7 +150,7 @@ class NeRFLoss(nn.Module):
         return self._l2_loss(input=results_rgb[..., :3], target=target_rgb[..., :3])
 
     def forward(self, results, target, **kwargs):
-        o = results['opacity'] + self._EPS
+        o = results['opacity'] + self._EPSILON
 
         d = {
             'rgb': self._rgb_loss(results_rgb=results['rgb'], target_rgb=target['rgb']),

@@ -165,7 +165,7 @@ class NGP(NGPBase):
 
         # constants
         N_AUX_CH = 13
-        N_XYZ_CH = 16
+        N_XYZ_CH = 32
         L = 16
         F = 2
         log2_T = 19
@@ -224,7 +224,7 @@ class NGP(NGPBase):
                     "activation": "ReLU",
                     "output_activation": "None",
                     "n_neurons": 64,
-                    "n_hidden_layers": 2,
+                    "n_hidden_layers": 1,
                 }
             )
 
@@ -236,7 +236,7 @@ class NGP(NGPBase):
                     "activation": "ReLU",
                     "output_activation": "None",
                     "n_neurons": 64,
-                    "n_hidden_layers": 2,
+                    "n_hidden_layers": 1,
                 }
             )
 
@@ -324,9 +324,9 @@ class NGP(NGPBase):
         d = d / torch.norm(d, dim=1, keepdim=True)
         d = self.dir_encoder((d + 1) / 2)
         h0, h = torch.sigmoid(h[:, :1]), torch.nn.functional.leaky_relu(h[:, 1:])
+        segs = self.seg_net(torch.cat((h0, h), dim=1))
         rgbs = self.rgb_net(torch.cat((d, h0, h), dim=1))
         ry, ruv, aux = rgbs[..., :1], rgbs[..., 1:3], torch.nn.functional.leaky_relu(rgbs[..., 3:])
-        segs = self.seg_net(torch.cat((h0, h), dim=1))
         rt = [ruv + self.multi_trans(aux, segs, head_idx, **kwargs) for head_idx in range(self.n_trans_head)]
         rt = torch.tanh(torch.cat(rt, -1))
 

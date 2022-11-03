@@ -1,22 +1,21 @@
-import matplotlib.pyplot as plt
-import torch
-from kornia.color import lab_to_rgb
-
-from opt import get_opts
-import numpy as np
-from einops import rearrange
-import dearpygui.dearpygui as dpg
-from scipy.spatial.transform import Rotation as R
 import time
+import warnings
+
+import dearpygui.dearpygui as dpg
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from einops import rearrange
+from kornia.color import lab_to_rgb
+from scipy.spatial.transform import Rotation as R
 
 from datasets import dataset_dict
 from datasets.ray_utils import get_ray_directions, get_rays
 from models.networks import NGP
 from models.rendering import render
+from opt import get_opts
 from train import depth2img
 from utils import load_ckpt
-
-import warnings
 
 warnings.filterwarnings("ignore")
 
@@ -140,10 +139,12 @@ class NGPGUI:
         def callback_depth(sender, app_data):
             self.img_mode = 1 - self.img_mode
 
+        _set_default = True
         ## control window ##
         with dpg.window(label="Control", tag="_control_window", width=200, height=150):
             for cls in range(NGPGUI._N_CLS):
-                dpg.add_slider_float(label=f"c{cls}", default_value=self.model.trans_net_p1[cls].item(),
+                dpg.add_slider_float(label=f"c{cls}",
+                                     default_value=self.model.trans_net_p1[cls].item() if _set_default else 0.,
                                      min_value=-2, max_value=2, tag=f"_c{cls}")
             dpg.add_button(label="show depth", tag="_button_depth",
                            callback=callback_depth)

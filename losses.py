@@ -60,20 +60,20 @@ class HistLoss(nn.Module):
             raise NotImplementedError
 
         tuv, ruv = rearrange(target[..., 1:3], 'b h w c -> b c h w'), rearrange(results[..., 1:3], 'b h w c -> b c h w')
-        dhuv = self._l1_loss(input=ruv.mean(), target=tuv.mean()) * 1e-3
+        dhuv = self._l1_loss(input=ruv.mean(dim=(2, 3)), target=tuv.mean(dim=(2, 3))) * 1e-3
 
         sptuv, spruv = spatial_gradient(tuv, normalized=True), spatial_gradient(ruv, normalized=True)
         sptuv, spruv = rearrange(sptuv, 'b c o h w -> b h w c o'), rearrange(spruv, 'b c o h w -> b h w c o')
-        dhuv = dhuv + self._l1_loss(input=spruv, target=sptuv)
-        # spmask = torch.all(torch.lt(spruv.abs(), 1.8), dim=-1)
-        # spmask = torch.all(spmask, dim=-1)
-        # dhuv = dhuv + (sptuv[spmask] - spruv[spmask]) ** 2
+        dhuv = rearrange(dhuv, 'b c -> b 1 1 c 1')
+        dhuv = dhuv + self._l1_loss(input=spruv, target=sptuv) * 1e-1
+        # spmask = torch.any(torch.le(spruv.abs(), 1.0), dim=-1)
+        # spmask = torch.any(spmask, dim=-1)
+        # dhuv = dhuv + self._l1_loss(input=spruv[spmask], target=sptuv[spmask])
 
         # tuv, ruv = torch.nn.functional.avg_pool2d(tuv, (2, 2)), torch.nn.functional.avg_pool2d(ruv, (2, 2))
         # tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')
         # thuv, rhuv = self._hist_func(tuv), self._hist_func(ruv)
-        # dhuv = self._hist_loss(input=rhuv / rhuv.sum(), target=thuv / thuv.sum()) * 1e-2
-        # dhuv = self._l1_loss(input=rhuv, target=thuv) * 1e-2
+        # dhuv = dhuv + self._l1_loss(input=rhuv, target=thuv).mean() * 1e-2
         return dhuv
 
 

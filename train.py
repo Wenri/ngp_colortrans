@@ -358,7 +358,7 @@ def main(hparams):
                       strategy=DDPPlugin(find_unused_parameters=False) if hparams.num_gpus > 1 else None,
                       num_sanity_val_steps=-1 if hparams.val_only else 0,
                       precision=16,
-                      accumulate_grad_batches=7,
+                      # accumulate_grad_batches=7,
                       # gradient_clip_val=0.5
                       )
 

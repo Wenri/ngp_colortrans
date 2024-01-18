@@ -175,8 +175,9 @@ class NeRFSystem(LightningModule):
 
         is_finite = torch.all(torch.isfinite(pred_img))
         if b_save or not is_finite:
-            self.save_image(pred_img, f'deferred_pred.png')
-            self.save_image(rearrange(img, 'h w c -> (h w) c'), f'deferred_gt.png')
+            self.save_image_trans(pred_img[:, :self.model.n_total_color_ch], f'deferred_pred.png')
+            self.save_image_trans(rearrange(img, 'h w c -> (h w) c')[:, :self.model.n_total_color_ch],
+                                  f'deferred_gt.png')
             assert is_finite
 
         pred_img.scatter_(dim=0, index=pix_idxs.unsqueeze(-1).expand_as(rays), src=rays)

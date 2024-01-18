@@ -52,8 +52,8 @@ class HistLoss(nn.Module):
         self._l1_loss = torch.nn.L1Loss(reduction='none')
 
     def forward(self, results, target, **kwargs):
-        if self:
-            raise NotImplementedError
+        # if self:
+        #     raise NotImplementedError
 
         tuv, ruv = rearrange(target[..., 1:3], 'b h w c -> b c h w'), rearrange(results[..., 1:3], 'b h w c -> b c h w')
         dhuv = self._l1_loss(input=ruv.mean(dim=(2, 3)), target=tuv.mean(dim=(2, 3))) * 1e-3
@@ -66,10 +66,10 @@ class HistLoss(nn.Module):
         # spmask = torch.any(spmask, dim=-1)
         # dhuv = dhuv + self._l1_loss(input=spruv[spmask], target=sptuv[spmask])
 
-        # tuv, ruv = torch.nn.functional.avg_pool2d(tuv, (2, 2)), torch.nn.functional.avg_pool2d(ruv, (2, 2))
-        # tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')
-        # thuv, rhuv = self._hist_func(tuv), self._hist_func(ruv)
-        # dhuv = dhuv + self._l1_loss(input=rhuv, target=thuv).mean() * 1e-2
+        tuv, ruv = torch.nn.functional.avg_pool2d(tuv, (2, 2)), torch.nn.functional.avg_pool2d(ruv, (2, 2))
+        tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')
+        thuv, rhuv = self._hist_func(tuv), self._hist_func(ruv)
+        dhuv = dhuv + self._l1_loss(input=rhuv, target=thuv).mean() * 1e-2
         return dhuv
 
 

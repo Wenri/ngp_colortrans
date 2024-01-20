@@ -1,8 +1,8 @@
 import torch
 import vren
+from einops import rearrange
 from torch.cuda.amp import custom_fwd, custom_bwd
 from torch_scatter import segment_csr
-from einops import rearrange
 
 
 class RayAABBIntersector(torch.autograd.Function):
@@ -23,6 +23,7 @@ class RayAABBIntersector(torch.autograd.Function):
         hits_t: (N_rays, max_hits, 2) hit t's (-1 if no hit)
         hits_voxel_idx: (N_rays, max_hits) hit voxel indices (-1 if no hit)
     """
+
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, rays_o, rays_d, center, half_size, max_hits):
@@ -46,6 +47,7 @@ class RaySphereIntersector(torch.autograd.Function):
         hits_t: (N_rays, max_hits, 2) hit t's (-1 if no hit)
         hits_sphere_idx: (N_rays, max_hits) hit sphere indices (-1 if no hit)
     """
+
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, rays_o, rays_d, center, radii, max_hits):
@@ -74,6 +76,7 @@ class RayMarcher(torch.autograd.Function):
         deltas: (N) dt for integration
         ts: (N) sample ts
     """
+
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, rays_o, rays_d, hits_t,
@@ -88,7 +91,7 @@ class RayMarcher(torch.autograd.Function):
                 density_bitfield, cascades, scale,
                 exp_step_factor, noise, grid_size, max_samples)
 
-        total_samples = counter[0] # total samples for all rays
+        total_samples = counter[0]  # total samples for all rays
         # remove redundant output
         xyzs = xyzs[:total_samples]
         dirs = dirs[:total_samples]
@@ -104,10 +107,10 @@ class RayMarcher(torch.autograd.Function):
     def backward(ctx, dL_drays_a, dL_dxyzs, dL_ddirs,
                  dL_ddeltas, dL_dts, dL_dtotal_samples):
         rays_a, ts = ctx.saved_tensors
-        segments = torch.cat([rays_a[:, 1], rays_a[-1:, 1]+rays_a[-1:, 2]])
+        segments = torch.cat([rays_a[:, 1], rays_a[-1:, 1] + rays_a[-1:, 2]])
         dL_drays_o = segment_csr(dL_dxyzs, segments)
         dL_drays_d = \
-            segment_csr(dL_dxyzs*rearrange(ts, 'n -> n 1')+dL_ddirs, segments)
+            segment_csr(dL_dxyzs * rearrange(ts, 'n -> n 1') + dL_ddirs, segments)
 
         return dL_drays_o, dL_drays_d, None, None, None, None, None, None, None
 
@@ -134,6 +137,7 @@ class VolumeRenderer(torch.autograd.Function):
         rgb: (N_rays, 3)
         ws: (N) sample point weights
     """
+
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, sigmas, rgbs, deltas, ts, rays_a, T_threshold):
@@ -149,7 +153,7 @@ class VolumeRenderer(torch.autograd.Function):
     @custom_bwd
     def backward(ctx, dL_dtotal_samples, dL_dopacity, dL_ddepth, dL_drgb, dL_dws):
         sigmas, rgbs, deltas, ts, rays_a, \
-        opacity, depth, rgb, ws = ctx.saved_tensors
+            opacity, depth, rgb, ws = ctx.saved_tensors
         dL_dsigmas, dL_drgbs = \
             vren.composite_train_bw(dL_dopacity, dL_ddepth, dL_drgb, dL_dws,
                                     sigmas, rgbs, ws, deltas, ts,
@@ -171,3 +175,24 @@ class TruncExp(torch.autograd.Function):
     def backward(ctx, dL_dout):
         x = ctx.saved_tensors[0]
         return dL_dout * torch.exp(x.clamp(-15, 15))
+
+
+def _num_tensor_elems(t):
+    return max(torch.prod(torch.tensor(t.size()[1:]).float()), 1.)
+
+
+def total_variation_loss(x):
+    """
+    :param x: (B, C, ...)
+    """
+    batch_size = x.shape[0]
+    tv = 0
+    for i in range(2, len(x.shape)):
+        n_res = x.shape[i]
+        idx1 = torch.arange(1, n_res).to(x.device)
+        idx2 = torch.arange(0, n_res - 1).to(x.device)
+        x1 = x.index_select(i, idx1)
+        x2 = x.index_select(i, idx2)
+        count = _num_tensor_elems(x1)
+        tv += torch.pow((x1 - x2), 2).sum() / count
+    return tv / batch_size

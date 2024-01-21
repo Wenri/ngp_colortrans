@@ -252,7 +252,7 @@ class NGPGUI(LightningModule):
                                    name=hparams.exp_name,
                                    default_hp_metric=False)
 
-        trainer = Trainer(max_epochs=1,
+        trainer = Trainer(max_epochs=3,
                           check_val_every_n_epoch=hparams.num_epochs,
                           callbacks=callbacks,
                           logger=logger,

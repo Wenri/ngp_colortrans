@@ -1,3 +1,4 @@
+import asyncio
 import os
 import subprocess
 import tempfile
@@ -71,6 +72,7 @@ class OrbitCamera:
 class NGPGUI(LightningModule):
     def __init__(self, hparams, K, img_wh, radius=2.5):
         super().__init__()
+        self.manual_callback_management = False
         self.save_hyperparameters(hparams)
         self.loss = NeRFLoss(lambda_distortion=self.hparams.distortion_loss_w)
 
@@ -87,13 +89,17 @@ class NGPGUI(LightningModule):
         self.mean_samples = 0
         self.img_mode = 0
         self.bilgrid3d_tv_loss_mult = 1e-2
+        self.editing = asyncio.Event()
+        self.editing_target = None
+        self.texture = None
 
         self.register_dpg()
 
     def setup(self, stage):
-        directions = get_ray_directions(self.cam.H, self.cam.W, self.cam.K)
+        directions, grid = get_ray_directions(self.cam.H, self.cam.W, self.cam.K, return_uv=True)
         rays_o, rays_d = get_rays(directions, torch.FloatTensor(self.cam.pose))
-        self.train_dataset = TensorDataset(rays_o, rays_d, self.editing_target)
+        editing_target = rearrange(self.editing_target, "h w c -> (h w) c")
+        self.train_dataset = TensorDataset(rays_o, rays_d, grid, editing_target)
 
     def configure_optimizers(self):
         # define additional parameters
@@ -105,7 +111,7 @@ class NGPGUI(LightningModule):
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
                           num_workers=0,
-                          batch_size=16384)
+                          batch_size=16384, shuffle=True)
 
     def val_dataloader(self):
         return DataLoader(self.train_dataset,
@@ -146,7 +152,8 @@ class NGPGUI(LightningModule):
 
     def register_dpg(self):
         dpg.create_context()
-        dpg.configure_app(manual_callback_management=True)
+        if self.manual_callback_management:
+            dpg.configure_app(manual_callback_management=True)
         dpg.create_viewport(title="ngp_pl", width=self.W, height=self.H, resizable=False)
 
         ## register texture ##
@@ -166,12 +173,15 @@ class NGPGUI(LightningModule):
         def callback_depth(sender, app_data):
             self.img_mode = 1 - self.img_mode
 
+        def callback_edit(sender, app_data):
+            self.editing.set()
+
         ## control window ##
         with dpg.window(label="Control", tag="_control_window", width=200, height=150):
             dpg.add_slider_float(label="alpha", default_value=1,
                                  min_value=0, max_value=1, tag="_alpha")
             dpg.add_button(label="show depth", tag="_button_depth", callback=callback_depth)
-            dpg.add_button(label="edit view", tag="_button_edit", callback=self.callback_edit)
+            dpg.add_button(label="edit view", tag="_button_edit", callback=callback_edit)
             dpg.add_separator()
             dpg.add_text('no data', tag="_log_time")
             dpg.add_text('no data', tag="_samples_per_ray")
@@ -221,31 +231,40 @@ class NGPGUI(LightningModule):
         dpg.set_viewport_large_icon("assets/icon.png")
         dpg.show_viewport()
 
-    def render(self):
+    async def render(self):
         while dpg.is_dearpygui_running():
-            dpg.set_value("_texture", self.render_cam(self.cam))
-            dpg.set_value("_log_time", f'Render time: {1000 * self.dt:.2f} ms')
-            dpg.set_value("_samples_per_ray", f'Samples/ray: {self.mean_samples:.2f}')
-            dpg.run_callbacks(dpg.get_callback_queue())
-            dpg.render_dearpygui_frame()
+            if self.manual_callback_management:
+                dpg.run_callbacks(dpg.get_callback_queue())
+            if self.editing.is_set():
+                await self.edit()
+                self.editing.clear()
+            self.update(self.render_cam(self.cam))
 
-    def callback_edit(self, sender, app_data):
+    def update(self, texture):
+        dpg.set_value("_texture", texture)
+        dpg.set_value("_log_time", f'Render time: {1000 * self.dt:.2f} ms')
+        dpg.set_value("_samples_per_ray", f'Samples/ray: {self.mean_samples:.2f}')
+        dpg.render_dearpygui_frame()
+
+    async def edit(self):
         with ExitStack() as stack:
             dpg.set_value('_alpha', 1.0)
             f = tempfile.NamedTemporaryFile(suffix='.png', delete=False, dir=Path(
                 "logs", hparams.dataset_name, hparams.exp_name))
             stack.callback(os.unlink, f.name)
             stack.enter_context(f)
-            img = self.render_cam(self.cam) * 255
+            texture = self.render_cam(self.cam)
+            img = texture * 255
             img = Image.fromarray(img.astype(np.uint8))
             img.save(f, format='PNG')
             f.close()
+            self.texture = torch.from_numpy(texture)
             subprocess.run(['/snap/bin/gimp', f.name])
             img = Image.open(f.name)
-        self.bil_opt(img)
+        return await self.bil_opt(np.asanyarray(img))
 
-    def bil_opt(self, img):
-        self.editing_target = rearrange(torch.from_numpy(np.asanyarray(img)), "h w c -> (h w) c")
+    async def bil_opt(self, img):
+        self.editing_target = torch.from_numpy(img) / 255.
 
         callbacks = [TQDMProgressBar(refresh_rate=1)]
 
@@ -253,8 +272,9 @@ class NGPGUI(LightningModule):
                                    name=hparams.exp_name,
                                    default_hp_metric=False)
 
-        trainer = Trainer(max_epochs=3,
-                          check_val_every_n_epoch=hparams.num_epochs,
+        trainer = Trainer(max_epochs=2,
+                          check_val_every_n_epoch=1,
+                          limit_val_batches=1,
                           callbacks=callbacks,
                           logger=logger,
                           enable_model_summary=False,
@@ -267,13 +287,18 @@ class NGPGUI(LightningModule):
         trainer.fit(self)
         self.model.cuda()
 
-    def training_step(self, batch, batch_nb, *args):
+    def validation_step(self, *args: Any, **kwargs: Any):
+        texture = self.render_cam(self.cam)
+        self.update(texture)
+        self.texture = torch.from_numpy(texture)
 
-        rays_o, rays_d, target = batch
+    def training_step(self, batch, batch_nb, *args):
+        rays_o, rays_d, grid, target = batch
         target = {
-            'rgb': target / 255.,
+            'rgb': target,
         }
         results = self(rays_o, rays_d, test_time=False)
+
         loss_d = self.loss(results, target)
 
         total_loss = 0.
@@ -287,6 +312,10 @@ class NGPGUI(LightningModule):
         loss_d['tv_bilgrids3d'] = total_loss
         loss = sum(lo.mean() for lo in loss_d.values())
 
+        grid = grid.to(device=self.texture.device, dtype=torch.long)
+        rgb = results['rgb'].detach().to(device=self.texture.device)
+        self.update(self.texture.index_put_((grid[:, 1], grid[:, 0]), rgb).numpy())
+
         return loss
 
 
@@ -297,5 +326,5 @@ if __name__ == "__main__":
               'read_meta': False}
     dataset = dataset_dict[hparams.dataset_name](**kwargs)
 
-    NGPGUI(hparams, dataset.K, dataset.img_wh).render()
+    asyncio.run(NGPGUI(hparams, dataset.K, dataset.img_wh).render())
     dpg.destroy_context()

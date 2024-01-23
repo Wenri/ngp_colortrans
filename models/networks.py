@@ -11,7 +11,7 @@ from .rendering import NEAR_DISTANCE
 
 
 class NGP(nn.Module):
-    def __init__(self, scale, rgb_act='Sigmoid'):
+    def __init__(self, scale, rgb_act='Sigmoid', bil_grids=False):
         super().__init__()
 
         self.rgb_act = rgb_act
@@ -95,7 +95,8 @@ class NGP(nn.Module):
                     )
                 setattr(self, f'tonemapper_net_{i}', tonemapper_net)
 
-        self.bil_grids = bilateral_grids.BilateralGridCP3D(color_cdf_spline_coeffs=None)
+        if bil_grids:
+            self.bil_grids = bilateral_grids.BilateralGridCP3D(color_cdf_spline_coeffs=None)
 
     def density(self, x, return_feat=False):
         """
@@ -157,8 +158,10 @@ class NGP(nn.Module):
             else:  # convert to LDR using tonemapper networks
                 rgbs = self.log_radiance_to_rgb(rgbs, **kwargs)
 
-        bilgrid3d_results = bilateral_grids.slice3d(self.bil_grids, x, rgbs)
-        rgbs = bilgrid3d_results['rgb']
+        if alpha := kwargs.get('alpha', 0):
+            bilgrid3d_results = bilateral_grids.slice3d(self.bil_grids, x, rgbs)
+            rgbs = (1 - alpha) * rgbs + alpha * bilgrid3d_results['rgb']
+
         return sigmas, rgbs
 
     @torch.no_grad()

@@ -75,7 +75,7 @@ class NGPGUI(LightningModule):
         self.loss = NeRFLoss(lambda_distortion=self.hparams.distortion_loss_w)
 
         rgb_act = 'None' if self.hparams.use_exposure else 'Sigmoid'
-        self.model = NGP(scale=hparams.scale, rgb_act=rgb_act).cuda()
+        self.model = NGP(scale=hparams.scale, rgb_act=rgb_act, bil_grids=True).cuda()
         load_ckpt(self.model, hparams.ckpt_path)
 
         self.cam = OrbitCamera(K, img_wh, r=radius)
@@ -115,14 +115,14 @@ class NGPGUI(LightningModule):
     def forward(self, rays_o, rays_d, test_time=True) -> Any:
         # TODO: set these attributes by gui
         if self.hparams.dataset_name in ['colmap', 'nerfpp']:
-            exp_step_factor = 1 / 256
+            exp_step_factor = 1 / 2 ** 10
         else:
             exp_step_factor = 0
 
         return render(self.model, rays_o, rays_d, **{
             'test_time': test_time, 'to_cpu': test_time, 'to_numpy': test_time,
             'T_threshold': 1e-2,
-            'exposure': dpg.get_value('_exposure'),
+            'alpha': dpg.get_value('_alpha'),
             'max_samples': 100,
             'exp_step_factor': exp_step_factor})
 
@@ -168,8 +168,8 @@ class NGPGUI(LightningModule):
 
         ## control window ##
         with dpg.window(label="Control", tag="_control_window", width=200, height=150):
-            dpg.add_slider_float(label="exposure", default_value=0.2,
-                                 min_value=1 / 60, max_value=32, tag="_exposure")
+            dpg.add_slider_float(label="alpha", default_value=1,
+                                 min_value=0, max_value=1, tag="_alpha")
             dpg.add_button(label="show depth", tag="_button_depth", callback=callback_depth)
             dpg.add_button(label="edit view", tag="_button_edit", callback=self.callback_edit)
             dpg.add_separator()
@@ -231,6 +231,7 @@ class NGPGUI(LightningModule):
 
     def callback_edit(self, sender, app_data):
         with ExitStack() as stack:
+            dpg.set_value('_alpha', 1.0)
             f = tempfile.NamedTemporaryFile(suffix='.png', delete=False, dir=Path(
                 "logs", hparams.dataset_name, hparams.exp_name))
             stack.callback(os.unlink, f.name)

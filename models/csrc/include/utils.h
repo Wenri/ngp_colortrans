@@ -5,6 +5,7 @@
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
+constexpr size_t n_ch = 16;
 
 std::vector<torch::Tensor> ray_aabb_intersect_cu(
     const torch::Tensor rays_o,

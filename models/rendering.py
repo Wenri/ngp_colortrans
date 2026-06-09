@@ -1,11 +1,12 @@
 import torch
-from .custom_functions import \
-    RayAABBIntersector, RayMarcher, VolumeRenderer
-from einops import rearrange
 import vren
+from einops import rearrange
+
+from .custom_functions import RayAABBIntersector, RayMarcher, VolumeRenderer
 
 MAX_SAMPLES = 512
 NEAR_DISTANCE = 0.01
+N_CH = vren.get_total_channels()
 
 
 @torch.cuda.amp.autocast()
@@ -66,7 +67,7 @@ def __render_rays_test(model, rays_o, rays_d, hits_t, **kwargs):
     device = rays_o.device
     opacity = torch.zeros(N_rays, device=device)
     depth = torch.zeros(N_rays, device=device)
-    rgb = torch.zeros(N_rays, 3, device=device)
+    rgb = torch.zeros(N_rays, N_CH, device=device)
 
     samples = total_samples = 0
     alive_indices = torch.arange(N_rays, device=device)
@@ -90,11 +91,11 @@ def __render_rays_test(model, rays_o, rays_d, hits_t, **kwargs):
         total_samples += N_eff_samples.sum()
         xyzs = rearrange(xyzs, 'n1 n2 c -> (n1 n2) c')
         dirs = rearrange(dirs, 'n1 n2 c -> (n1 n2) c')
-        valid_mask = ~torch.all(dirs == 0, dim=1)
+        valid_mask = torch.any(dirs, dim=1)
         if valid_mask.sum() == 0: break
 
         sigmas = torch.zeros(len(xyzs), device=device)
-        rgbs = torch.zeros(len(xyzs), 3, device=device)
+        rgbs = torch.zeros(len(xyzs), N_CH, device=device)
         sigmas[valid_mask], _rgbs = model(xyzs[valid_mask], dirs[valid_mask], **kwargs)
         rgbs[valid_mask] = _rgbs.float()
         sigmas = rearrange(sigmas, '(n1 n2) -> n1 n2', n2=N_samples)
@@ -112,9 +113,9 @@ def __render_rays_test(model, rays_o, rays_d, hits_t, **kwargs):
     results['total_samples'] = total_samples  # total samples for all rays
 
     if exp_step_factor == 0:  # synthetic
-        rgb_bg = torch.ones(3, device=device)
+        rgb_bg = torch.ones(N_CH, device=device)
     else:  # real
-        rgb_bg = torch.zeros(3, device=device)
+        rgb_bg = torch.zeros(N_CH, device=device)
     results['rgb'] += rgb_bg * rearrange(1 - opacity, 'n -> n 1')
 
     return results
@@ -148,17 +149,17 @@ def __render_rays_train(model, rays_o, rays_d, hits_t, **kwargs):
 
     (results['vr_samples'], results['opacity'],
      results['depth'], results['rgb'], results['ws']) = \
-        VolumeRenderer.apply(sigmas, rgbs, results['deltas'], results['ts'],
+        VolumeRenderer.apply(sigmas, rgbs.contiguous(), results['deltas'], results['ts'],
                              rays_a, kwargs.get('T_threshold', 1e-4))
     results['rays_a'] = rays_a
 
     if exp_step_factor == 0:  # synthetic
-        rgb_bg = torch.ones(3, device=rays_o.device)
+        rgb_bg = torch.ones_like(results['rgb'])
     else:  # real
         if kwargs.get('random_bg', False):
-            rgb_bg = torch.rand(3, device=rays_o.device)
+            rgb_bg = torch.rand_like(results['rgb'])
         else:
-            rgb_bg = torch.zeros(3, device=rays_o.device)
+            rgb_bg = torch.zeros_like(results['rgb'])
     results['rgb'] = results['rgb'] + rgb_bg * rearrange(1 - results['opacity'], 'n -> n 1')
 
     return results

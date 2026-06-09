@@ -1,7 +1,9 @@
 from typing import Optional
 
 import torch
-from kornia.color import yuv_to_rgb
+from PIL import ImageCms
+from PIL import Image
+from kornia.color import lab_to_rgb
 from torch import nn
 from opt import get_opts
 import os
@@ -10,7 +12,6 @@ import imageio
 import numpy as np
 import cv2
 from einops import rearrange
-
 # data
 from torch.utils.data import DataLoader
 from datasets import dataset_dict
@@ -18,8 +19,7 @@ from datasets.ray_utils import axisangle_to_R, get_rays
 
 # models
 from models.networks import NGP
-from models.nerf_helpers import NeRF
-from models.rendering import render, MAX_SAMPLES
+from models.rendering import render, MAX_SAMPLES, N_CH
 
 # optimizer, losses
 from apex.optimizers import FusedAdam
@@ -56,7 +56,7 @@ def depth2img(depth):
 
 
 class NeRFSystem(LightningModule):
-    def __init__(self, hparams):
+    def __init__(self, hparams, palette=None):
         super().__init__()
         self.val_dir = f'results/{hparams.dataset_name}/{hparams.exp_name}/init'
         os.makedirs(self.val_dir, exist_ok=True)
@@ -65,8 +65,6 @@ class NeRFSystem(LightningModule):
         self.warmup_steps = 256
         self.update_interval = 16
 
-        self.loss = NeRFLoss(lambda_distortion=self.hparams.distortion_loss_w)
-        self.deferred_loss = HistLoss()
         self.train_psnr = PeakSignalNoiseRatio(data_range=1)
         self.val_psnr = PeakSignalNoiseRatio(data_range=1)
         self.val_ssim = StructuralSimilarityIndexMeasure(data_range=1)
@@ -78,6 +76,18 @@ class NeRFSystem(LightningModule):
         rgb_act = 'None' if self.hparams.use_exposure else None
         self.model = NGP(scale=self.hparams.scale, rgb_act=rgb_act)
         # self.model = NeRF(scale=self.hparams.scale, rgb_act=rgb_act)
+
+        self.loss = NeRFLoss(self.model.n_total_color_ch, lambda_distortion=self.hparams.distortion_loss_w)
+        self.deferred_loss = HistLoss()
+
+        N_CLASSES = N_CH - self.model.n_total_color_ch
+
+        if palette is None:
+            palette = np.random.randint(0, 255, size=(N_CLASSES, 3))
+        self.palette = np.asarray(palette)
+        assert palette.shape[0] == N_CLASSES
+        assert palette.shape[1] == 3
+        assert len(palette.shape) == 2
 
     def forward(self, batch, split):
         if split == 'train':
@@ -117,13 +127,12 @@ class NeRFSystem(LightningModule):
         # define additional parameters
         self.register_buffer('directions', self.train_dataset.directions.to(self.device))
         self.register_buffer('poses', self.train_dataset.poses.to(self.device))
+        self.loss.setup_sem_ind(self.train_dataset.sort_sem())
 
         if self.hparams.optimize_ext:
             N = len(self.train_dataset.poses)
-            self.register_parameter('dR',
-                                    nn.Parameter(torch.zeros(N, 3, device=self.device)))
-            self.register_parameter('dT',
-                                    nn.Parameter(torch.zeros(N, 3, device=self.device)))
+            self.register_parameter('dR', nn.Parameter(torch.zeros(N, 3, device=self.device)))
+            self.register_parameter('dT', nn.Parameter(torch.zeros(N, 3, device=self.device)))
 
         load_ckpt(self.model, self.hparams.weight_path)
 
@@ -198,7 +207,11 @@ class NeRFSystem(LightningModule):
         loss = sum(lo.mean() for lo in loss_d.values())
 
         with torch.no_grad():
-            self.train_psnr(results['rgb'], batch['rgb'])
+            scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=batch['rgb'].dtype, device=batch['rgb'].device)
+            rgb_pred = lab_to_rgb(rearrange(results['rgb'][..., :3] * scale, 'b c -> b c 1 1'))
+            rgb_gt = lab_to_rgb(rearrange(batch['rgb'][..., :3] * scale, 'b c -> b c 1 1'))
+            self.train_psnr(rgb_pred, rgb_gt)
+
         self.log('lr', self.net_opt.param_groups[0]['lr'])
         self.log('train/loss', loss)
         # ray marching samples per ray (occupied space on the ray)
@@ -216,21 +229,23 @@ class NeRFSystem(LightningModule):
             os.makedirs(self.val_dir, exist_ok=True)
 
     def validation_step(self, batch, batch_nb):
+        w, h = self.train_dataset.img_wh
         rgb_gt = batch['rgb']
         results = self(batch, split='test')
 
         logs = {}
+        scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=rgb_gt.dtype, device=rgb_gt.device)
         # compute each metric per image
-        self.val_psnr(results['rgb'], rgb_gt)
+        rgb_pred = lab_to_rgb(rearrange(results['rgb'][..., :3] * scale, '(h w) c -> 1 c h w', h=h))
+        rgb_gt = lab_to_rgb(rearrange(rgb_gt[..., :3] * scale, '(h w) c -> 1 c h w', h=h))
+
+        self.val_psnr(rgb_pred, rgb_gt)
         logs['psnr'] = self.val_psnr.compute()
         self.val_psnr.reset()
-
-        w, h = self.train_dataset.img_wh
-        rgb_pred = yuv_to_rgb(rearrange(results['rgb'], '(h w) c -> 1 c h w', h=h))
-        rgb_gt = yuv_to_rgb(rearrange(rgb_gt, '(h w) c -> 1 c h w', h=h))
         self.val_ssim(rgb_pred, rgb_gt)
         logs['ssim'] = self.val_ssim.compute()
         self.val_ssim.reset()
+
         if self.hparams.eval_lpips:
             self.val_lpips(torch.clip(rgb_pred * 2 - 1, -1, 1),
                            torch.clip(rgb_gt * 2 - 1, -1, 1))
@@ -239,8 +254,12 @@ class NeRFSystem(LightningModule):
 
         if not self.hparams.no_save_test:  # save test image to disk
             idx = batch['img_idxs']
-            self.save_image(results['rgb'], f'{idx:03d}.png')
+            self.save_seg(self.save_image_trans(
+                results['rgb'][:, :self.model.n_total_color_ch], f'{idx:03d}.png'),
+                results['rgb'][:, self.model.n_total_color_ch:], f'{idx:03d}_s.png')
             self.save_depth(results['depth'], f'{idx:03d}_d.png')
+            if not self.current_epoch:
+                self.save_image_trans(batch['rgb'][:, :self.model.n_total_color_ch], f'{idx:03d}_gt.png')
 
         return logs
 
@@ -264,17 +283,52 @@ class NeRFSystem(LightningModule):
         items.pop("v_num", None)
         return items
 
-    def save_image(self, rays, name):
+    def save_image_trans(self, rays, name):
+        base, ext = os.path.splitext(name)
+        scale = torch.as_tensor((255.0, 128.0, 128.0, 128.0, 128.0), dtype=rays.dtype, device=rays.device)
+        L, a, b, ta, tb = torch.unbind(rays * scale, dim=-1)
+        img = self.save_image(L, a, b, name)
+        self.save_image(L, ta, tb, f'{base}_t{ext}')
+        return img
+
+    def save_image(self, L, a, b, name):
         w, h = self.train_dataset.img_wh
-        rgb_pred = yuv_to_rgb(rearrange(rays, '(h w) c -> 1 c h w', h=h))
-        rgb_pred = rearrange(rgb_pred.squeeze(0), 'c h w -> h w c')
-        rgb_pred = torch.clamp(rgb_pred * 255, min=0, max=255).cpu().numpy().astype(np.uint8)
-        imageio.imsave(os.path.join(self.val_dir, name), rgb_pred)
+        L = torch.clamp(L.round(), 0, 255).cpu().numpy().astype(np.uint8)
+        a = torch.clamp(a.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)
+        b = torch.clamp(b.round(), -128, 127).cpu().numpy().astype(np.int8).view(np.uint8)
+        lab = rearrange(np.stack((L, a, b), axis=1), '(h w) c -> h w c', w=w, h=h)
+        lab = Image.fromarray(lab, mode='LAB')
+        # Create sRGB ICC profile and convert image to sRGB
+        lab_icc = ImageCms.createProfile('LAB', colorTemp=6500)
+        # Create sRGB ICC profile and convert image to sRGB
+        srgb_icc = ImageCms.createProfile('sRGB')
+        img = ImageCms.profileToProfile(lab, lab_icc, srgb_icc, outputMode='RGB')
+        img.save(os.path.join(self.val_dir, name))
+        return np.asarray(img)
 
     def save_depth(self, depth, name):
         w, h = self.train_dataset.img_wh
         depth = depth2img(rearrange(depth.cpu().numpy(), '(h w) -> h w', h=h))
         imageio.imsave(os.path.join(self.val_dir, name), depth)
+        return depth
+
+    def save_seg(self, img, seg_logit, name):
+        w, h = self.train_dataset.img_wh
+        # print(name, seg_logit.min(), seg_logit.max())
+
+        seg = rearrange(seg_logit.argmax(dim=1).cpu().numpy(), '(h w) -> h w', w=w, h=h)
+
+        color_seg = np.zeros((seg.shape[0], seg.shape[1], 3), dtype=np.uint8)
+        for label, color in enumerate(self.palette):
+            color_seg[seg == label, :] = color
+
+        # from IPython import embed; embed(header='debug vis')
+        color_seg = img * 0.5 + color_seg * 0.5
+        color_seg = color_seg.astype(np.uint8)
+
+        # save the results
+        imageio.imsave(os.path.join(self.val_dir, name), color_seg)
+        return color_seg
 
 
 def main(hparams):
@@ -304,6 +358,7 @@ def main(hparams):
                       strategy=DDPPlugin(find_unused_parameters=False) if hparams.num_gpus > 1 else None,
                       num_sanity_val_steps=-1 if hparams.val_only else 0,
                       precision=16,
+                      # accumulate_grad_batches=7,
                       # gradient_clip_val=0.5
                       )
 

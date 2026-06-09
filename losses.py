@@ -1,11 +1,14 @@
 import torch
+import numpy as np
 from kornia.color import rgb_to_yuv, rgb_to_yuv420
 from kornia.filters import spatial_gradient
 from torch import nn
+import torch.nn.functional as F
 import vren
 from einops import rearrange
 
 from misc.differentiable_histogram import GaussianHistogram, MultivariateGaussianHistogram
+from misc.imagewrap import _make_L_matrix
 from misc.rgb_lab_formulation_pytorch import rgb_to_lab
 
 
@@ -53,44 +56,80 @@ class HistLoss(nn.Module):
         self._l1_loss = torch.nn.L1Loss(reduction='none')
 
     def forward(self, results, target, **kwargs):
+        if self:
+            raise NotImplementedError
+
         tuv, ruv = rearrange(target[..., 1:3], 'b h w c -> b c h w'), rearrange(results[..., 1:3], 'b h w c -> b c h w')
-        dhuv = self._l1_loss(input=ruv.mean(), target=tuv.mean()) * 1e-3
+        dhuv = self._l1_loss(input=ruv.mean(dim=(2, 3)), target=tuv.mean(dim=(2, 3))) * 1e-3
 
         sptuv, spruv = spatial_gradient(tuv, normalized=True), spatial_gradient(ruv, normalized=True)
         sptuv, spruv = rearrange(sptuv, 'b c o h w -> b h w c o'), rearrange(spruv, 'b c o h w -> b h w c o')
-        dhuv = dhuv + self._l1_loss(input=spruv, target=sptuv)
-        # spmask = torch.all(torch.lt(spruv.abs(), 1.8), dim=-1)
-        # spmask = torch.all(spmask, dim=-1)
-        # dhuv = dhuv + (sptuv[spmask] - spruv[spmask]) ** 2
+        dhuv = rearrange(dhuv, 'b c -> b 1 1 c 1')
+        dhuv = dhuv + self._l1_loss(input=spruv, target=sptuv) * 1e-1
+        # spmask = torch.any(torch.le(spruv.abs(), 1.0), dim=-1)
+        # spmask = torch.any(spmask, dim=-1)
+        # dhuv = dhuv + self._l1_loss(input=spruv[spmask], target=sptuv[spmask])
 
         # tuv, ruv = torch.nn.functional.avg_pool2d(tuv, (2, 2)), torch.nn.functional.avg_pool2d(ruv, (2, 2))
         # tuv, ruv = rearrange(tuv, 'b c h w -> (b h w) c'), rearrange(ruv, 'b c h w -> (b h w) c')
         # thuv, rhuv = self._hist_func(tuv), self._hist_func(ruv)
-        # dhuv = self._hist_loss(input=rhuv / rhuv.sum(), target=thuv / thuv.sum()) * 1e-2
-        # dhuv = self._l1_loss(input=rhuv, target=thuv) * 1e-2
+        # dhuv = dhuv + self._l1_loss(input=rhuv, target=thuv).mean() * 1e-2
         return dhuv
 
 
 class NeRFLoss(nn.Module):
-    def __init__(self, lambda_opacity=1e-3, lambda_distortion=1e-3):
+    _EPS = torch.finfo(torch.float32).eps
+
+    def __init__(self, n_color_ch, lambda_opacity=1e-3, lambda_distortion=1e-3):
         super().__init__()
 
         self.lambda_opacity = lambda_opacity
         self.lambda_distortion = lambda_distortion
+        self._l1_loss = torch.nn.HuberLoss(reduction='none', delta=0.1)
+        self._l2_loss = torch.nn.MSELoss(reduction='none')
+        self._n_color_ch = n_color_ch
 
-    def _yuv_loss(self, results_yuv, target_yuv):
-        ry, ty = results_yuv[..., 0], target_yuv[..., 0]
-        dy = (ty - ry) ** 2
-        return dy
+    def setup_sem_ind(self, sem_ind):
+        self.register_buffer('sem_ind', sem_ind)
 
-    def _rgb_loss(self, results_yuv, target_yuv):
-        return (results_yuv - target_yuv) ** 2
+    def _seg_loss(self, results_seg, target_seg):
+        seg = results_seg[..., self._n_color_ch:]
+        n_sem = seg.shape[1] - 1
+        target_seg = torch.softmax(target_seg, dim=1, dtype=torch.float32)
+        target_seg_n = target_seg[..., self.sem_ind[:n_sem]]
+        target_seg_nr = target_seg_n.max(dim=1)
+        target_seg_o = target_seg[..., self.sem_ind[n_sem:]]
+        target_seg_or = torch.sum(target_seg_o, dim=1)
+
+        target_is_n = torch.ge(target_seg_nr.values, target_seg_or)
+        target_idx = torch.where(target_is_n, target_seg_nr.indices, n_sem)
+        target_conf = torch.where(target_is_n, target_seg_nr.values, target_seg_or)
+        selected = torch.ge(target_conf, 0.5)
+
+        loss = target_conf[selected] * F.cross_entropy(seg[selected], target_idx[selected], reduction='none')
+        return loss * 1e-1
+
+    def _lab_loss(self, results_ab, target_ab):
+        weight = 1e-1
+        n_ch = 2
+        results_ab = results_ab[..., 3:self._n_color_ch]
+        target_ab = target_ab[..., 3:]
+        loss = []
+        for idx in range(0, results_ab.shape[1], n_ch):
+            loss.append(self._l1_loss(input=results_ab[..., idx:idx + n_ch],
+                                      target=target_ab[..., idx:idx + n_ch]) * weight)
+        return torch.cat(loss, dim=1)
+
+    def _rgb_loss(self, results_rgb, target_rgb):
+        return self._l2_loss(input=results_rgb[..., :3], target=target_rgb[..., :3])
 
     def forward(self, results, target, **kwargs):
-        o = results['opacity'] + 1e-10
+        o = results['opacity'] + self._EPS
 
         d = {
-            'rgb': self._rgb_loss(results_yuv=results['rgb'], target_yuv=target['rgb']),
+            'rgb': self._rgb_loss(results_rgb=results['rgb'], target_rgb=target['rgb']),
+            'trans': self._lab_loss(results_ab=results['rgb'], target_ab=target['rgb']),
+            'seg': self._seg_loss(results_seg=results['rgb'], target_seg=target['seg']),
             # encourage opacity to be either 0 or 1 to avoid floater
             'opacity': self.lambda_opacity * (-o * torch.log(o)),
         }

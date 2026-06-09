@@ -27,14 +27,14 @@ This implementation has **strict** requirements due to dependencies on other lib
 ## Hardware
 
 * OS: Ubuntu 20.04+
-* NVIDIA GPU with Compute Compatibility >= 75 and memory > 6GB (tested with RTX 2080 Ti), CUDA 11.3+
+* NVIDIA GPU with Compute Compatibility >= 75 and memory > 6GB (tested with RTX 2080 Ti), CUDA 11.8+
 * 32GB RAM (in order to load full size images)
 
 ## Software
 
 * Python>=3.10 (the code uses `match` statements), NumPy < 2.0 (uses `np.float_`)
 * Python libraries
-    * Install pytorch by `pip install torch==1.11.0 --extra-index-url https://download.pytorch.org/whl/cu113`
+    * Install `pytorch>=2.1` matching your CUDA version, e.g. `pip install torch --index-url https://download.pytorch.org/whl/cu121` (required by pytorch-lightning 2.4)
     * Install `torch-scatter` following their [instruction](https://github.com/rusty1s/pytorch_scatter#installation)
     * Install `tinycudann` following their [instruction](https://github.com/NVlabs/tiny-cuda-nn#pytorch-extension) (pytorch extension)
     * Install `apex` following their [instruction](https://github.com/NVIDIA/apex#linux)

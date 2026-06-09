@@ -8,7 +8,7 @@ A fork of [kwea123/ngp_pl](https://github.com/kwea123/ngp_pl) (Instant-NGP NeRF 
 
 ## Environment & build
 
-Strict CUDA-only dependency chain (see README for install order): torch 1.11 + CUDA 11.3, `tinycudann`, NVIDIA `apex` (FusedAdam), `torch-scatter`, pytorch-lightning 1.7, then `pip install -r requirements.txt`. Python ≥ 3.10 (`match` statements), NumPy < 2.0 (`np.float_`). Training runs with mixed precision (`precision=16`) on GPU only.
+Strict CUDA-only dependency chain (see README for install order): torch ≥ 2.1, `tinycudann`, NVIDIA `apex` (FusedAdam), `torch-scatter`, pytorch-lightning 2.4, then `pip install -r requirements.txt`. Python ≥ 3.10 (`match` statements), NumPy < 2.0 (`np.float_`). Training runs with mixed precision (`precision=16`) on GPU only.
 
 The custom CUDA volume-rendering extension `vren` lives in `models/csrc/` and must be (re)installed after any change to its `.cu`/`.cpp`/`.h` files or after pulling:
 

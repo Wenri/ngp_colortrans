@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Optional
 
 import torch
@@ -34,11 +35,10 @@ from torchmetrics import (
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 # pytorch-lightning
-from pytorch_lightning.plugins import DDPPlugin
+from lightning_fabric.utilities.distributed import _all_gather_ddp_if_available as all_gather_ddp_if_available
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import TQDMProgressBar, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.utilities.distributed import all_gather_ddp_if_available
 
 from utils import slim_ckpt, load_ckpt
 
@@ -53,6 +53,14 @@ def depth2img(depth):
                                   cv2.COLORMAP_TURBO)
 
     return depth_img
+
+
+class ProgressBar(TQDMProgressBar):
+    # don't show the version number
+    def get_metrics(self, trainer, pl_module):
+        items = super().get_metrics(trainer, pl_module)
+        items.pop("v_num", None)
+        return items
 
 
 class NeRFSystem(LightningModule):
@@ -223,33 +231,35 @@ class NeRFSystem(LightningModule):
         return loss
 
     def on_validation_start(self):
+        super().on_validation_start()
         torch.cuda.empty_cache()
         if not self.hparams.no_save_test:
             self.val_dir = f'results/{self.hparams.dataset_name}/{self.hparams.exp_name}/{self.current_epoch}'
             os.makedirs(self.val_dir, exist_ok=True)
+        self.val_output_list = defaultdict(list)
 
     def validation_step(self, batch, batch_nb):
         w, h = self.train_dataset.img_wh
         rgb_gt = batch['rgb']
         results = self(batch, split='test')
 
-        logs = {}
+        logs = self.val_output_list
         scale = torch.as_tensor((100.0, 128.0, 128.0), dtype=rgb_gt.dtype, device=rgb_gt.device)
         # compute each metric per image
         rgb_pred = lab_to_rgb(rearrange(results['rgb'][..., :3] * scale, '(h w) c -> 1 c h w', h=h))
         rgb_gt = lab_to_rgb(rearrange(rgb_gt[..., :3] * scale, '(h w) c -> 1 c h w', h=h))
 
         self.val_psnr(rgb_pred, rgb_gt)
-        logs['psnr'] = self.val_psnr.compute()
+        logs['psnr'].append(self.val_psnr.compute())
         self.val_psnr.reset()
         self.val_ssim(rgb_pred, rgb_gt)
-        logs['ssim'] = self.val_ssim.compute()
+        logs['ssim'].append(self.val_ssim.compute())
         self.val_ssim.reset()
 
         if self.hparams.eval_lpips:
             self.val_lpips(torch.clip(rgb_pred * 2 - 1, -1, 1),
                            torch.clip(rgb_gt * 2 - 1, -1, 1))
-            logs['lpips'] = self.val_lpips.compute()
+            logs['lpips'].append(self.val_lpips.compute())
             self.val_lpips.reset()
 
         if not self.hparams.no_save_test:  # save test image to disk
@@ -261,27 +271,20 @@ class NeRFSystem(LightningModule):
             if not self.current_epoch:
                 self.save_image_trans(batch['rgb'][:, :self.model.n_total_color_ch], f'{idx:03d}_gt.png')
 
-        return logs
-
-    def validation_epoch_end(self, outputs):
-        psnrs = torch.stack([x['psnr'] for x in outputs])
+    def on_validation_epoch_end(self):
+        outputs = self.val_output_list
+        psnrs = torch.stack(outputs['psnr'])
         mean_psnr = all_gather_ddp_if_available(psnrs).mean()
         self.log('test/psnr', mean_psnr, True)
 
-        ssims = torch.stack([x['ssim'] for x in outputs])
+        ssims = torch.stack(outputs['ssim'])
         mean_ssim = all_gather_ddp_if_available(ssims).mean()
         self.log('test/ssim', mean_ssim)
 
         if self.hparams.eval_lpips:
-            lpipss = torch.stack([x['lpips'] for x in outputs])
+            lpipss = torch.stack(outputs['lpips'])
             mean_lpips = all_gather_ddp_if_available(lpipss).mean()
             self.log('test/lpips_vgg', mean_lpips)
-
-    def get_progress_bar_dict(self):
-        # don't show the version number
-        items = super().get_progress_bar_dict()
-        items.pop("v_num", None)
-        return items
 
     def save_image_trans(self, rays, name):
         base, ext = os.path.splitext(name)
@@ -342,7 +345,7 @@ def main(hparams):
                               every_n_epochs=hparams.num_epochs,
                               save_on_train_epoch_end=True,
                               save_top_k=-1)
-    callbacks = [ckpt_cb, TQDMProgressBar(refresh_rate=1)]
+    callbacks = [ckpt_cb, ProgressBar(refresh_rate=1)]
 
     logger = TensorBoardLogger(save_dir=f"logs/{hparams.dataset_name}",
                                name=hparams.exp_name,
@@ -355,7 +358,7 @@ def main(hparams):
                       enable_model_summary=False,
                       accelerator='gpu',
                       devices=hparams.num_gpus,
-                      strategy=DDPPlugin(find_unused_parameters=False) if hparams.num_gpus > 1 else None,
+                      strategy='ddp' if hparams.num_gpus > 1 else 'auto',
                       num_sanity_val_steps=-1 if hparams.val_only else 0,
                       precision=16,
                       # accumulate_grad_batches=7,

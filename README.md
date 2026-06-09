@@ -1,169 +1,83 @@
-# ngp_pl
+# ngp_colortrans
 
-### Advertisement: stay tuned with [my channel](https://www.youtube.com/channel/UC7UlsMUu_gIgpqNGB4SqSwQ), I will upload cuda tutorials recently, and do a stream about this implementation!
+NeRF **color transfer** experiments built on [ngp_pl](https://github.com/kwea123/ngp_pl) — Instant-NGP (NeRF only) in pytorch+cuda trained with pytorch-lightning.
 
-<!-- ### Update 2022 July 29th: GUI prototype is available now (see following video)!
+This fork modifies the original reconstruction pipeline to operate in **YUV color space** and adds a deferred full-image loss on the chrominance channels, so that the color statistics of the rendered scene can be driven toward a target while luminance/geometry remain supervised per ray.
 
-### Update 2022 July 24th: Training on custom data is possible now!
+Upstream references:
 
-### Update 2022 July 14th: Multi-GPU training is available now! With multiple GPUs, now you can achieve high quality under a minute! -->
+* [ngp_pl](https://github.com/kwea123/ngp_pl) — the base of this fork
+* [Official CUDA implementation](https://github.com/NVlabs/instant-ngp/tree/master)
+* [torch-ngp](https://github.com/ashawkey/torch-ngp)
 
-Instant-ngp (only NeRF) in pytorch+cuda trained with pytorch-lightning (**high quality with high speed**). This repo aims at providing a concise pytorch interface to facilitate future research, and am grateful if you can share it (and a citation is highly appreciated)!
+# :rainbow: What's different from ngp_pl
 
-*  [Official CUDA implementation](https://github.com/NVlabs/instant-ngp/tree/master)
-*  [torch-ngp](https://github.com/ashawkey/torch-ngp) another pytorch implementation that I highly referenced.
-
-# :paintbrush: Gallery
-
-https://user-images.githubusercontent.com/11364490/181671484-d5e154c8-6cea-4d52-94b5-1e5dd92955f2.mp4
-
-Other representative videos are in [GALLERY.md](GALLERY.md)
+* **YUV pipeline**: input images are converted from their embedded ICC profile to sRGB, then to YUV at load time (`datasets/color_utils.py`). The network regresses YUV directly — tensors named `rgb` throughout the code actually hold YUV. Renders are converted back to RGB only for saving and for SSIM/LPIPS.
+* **Separate luma/chroma heads**: the NGP color output uses a sigmoid activation for Y and tanh for the signed UV channels (`models/networks.py`).
+* **Deferred color loss**: the hidden ray sampling strategy `deferred_images` samples all rays of a batch from a single image and additionally returns the whole image. Each step, the full image is rendered without gradients, the current batch's differentiable ray predictions are scattered into it, and a chrominance loss (`HistLoss` in `losses.py`: UV channel means + UV spatial gradients) is applied on the composite — full-image color statistics with per-batch memory cost.
+* **Differentiable color tools** in `misc/`: Gaussian / multivariate-Gaussian soft histograms and an RGB↔Lab formulation, used as alternative color-statistics losses.
+* `--weight_path` can load a pretrained scene checkpoint (weights only) as the starting point of an experiment.
 
 # :computer: Installation
 
-This implementation has **strict** requirements due to dependencies on other libraries, if you encounter installation problem due to hardware/software mismatch, I'm afraid there is **no intention** to support different platforms (you are welcomed to contribute).
+This implementation has **strict** requirements due to dependencies on other libraries; if you encounter an installation problem due to hardware/software mismatch, there is no intention to support different platforms.
 
 ## Hardware
 
-* OS: Ubuntu 20.04
-* NVIDIA GPU with Compute Compatibility >= 75 and memory > 6GB (Tested with RTX 2080 Ti), CUDA 11.3 (might work with older version)
+* OS: Ubuntu 20.04+
+* NVIDIA GPU with Compute Compatibility >= 75 and memory > 6GB (tested with RTX 2080 Ti), CUDA 11.3+
 * 32GB RAM (in order to load full size images)
 
 ## Software
 
-* Clone this repo by `git clone https://github.com/kwea123/ngp_pl`
-* Python>=3.8 (installation via [anaconda](https://www.anaconda.com/distribution/) is recommended, use `conda create -n ngp_pl python=3.8` to create a conda environment and activate it by `conda activate ngp_pl`)
+* Python>=3.10 (the code uses `match` statements; installation via [anaconda](https://www.anaconda.com/distribution/) is recommended)
 * Python libraries
-    * Install `pytorch>=1.11.0` by `pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu113`
+    * Install `pytorch>=1.11.0` with the CUDA version matching your setup
     * Install `torch-scatter` following their [instruction](https://github.com/rusty1s/pytorch_scatter#installation)
     * Install `tinycudann` following their [instruction](https://github.com/NVlabs/tiny-cuda-nn#requirements) (compilation and pytorch extension)
     * Install `apex` following their [instruction](https://github.com/NVIDIA/apex#linux)
     * Install core requirements by `pip install -r requirements.txt`
-
-* Cuda extension: Upgrade `pip` to >= 22.1 and run `pip install models/csrc/` (please run this each time you `pull` the code)
+* Cuda extension: upgrade `pip` to >= 22.1 and run `pip install models/csrc/` (re-run this each time you pull or modify the code under `models/csrc/`)
 
 # :books: Supported Datasets
 
-1.  NSVF data
+1.  NSVF data: download preprocessed datasets (`Synthetic_NeRF`, `Synthetic_NSVF`, `BlendedMVS`, `TanksAndTemples`) from [NSVF](https://github.com/facebookresearch/NSVF#dataset). **Do not change the folder names** since there is some hard-coded fix in the dataloader.
 
-Download preprocessed datasets (`Synthetic_NeRF`, `Synthetic_NSVF`, `BlendedMVS`, `TanksAndTemples`) from [NSVF](https://github.com/facebookresearch/NSVF#dataset). **Do not change the folder names** since there is some hard-coded fix in my dataloader.
+2.  NeRF++ data: download from [here](https://github.com/Kai-46/nerfplusplus#data).
 
-2.  NeRF++ data
+3.  Colmap data: for custom data, run `colmap` and get a folder `sparse/0` under which there are `cameras.bin`, `images.bin` and `points3D.bin`. [nerf_llff_data](https://drive.google.com/file/d/16VnMcF1KJYxN9QId6TClMsZRahHNMW5g/view?usp=sharing), [mipnerf360 data](http://storage.googleapis.com/gresearch/refraw360/360_v2.zip) and [HDR-NeRF data](https://drive.google.com/drive/folders/1OTDLLH8ydKX1DcaNpbQ46LlP0dKx6E-I) are also supported.
 
-Download data from [here](https://github.com/Kai-46/nerfplusplus#data).
+4.  RTMV data: download from [here](http://www.cs.umd.edu/~mmeshry/projects/rtmv/) and run `python misc/prepare_rtmv.py <path/to/RTMV>` to convert the hdr images into ldr images for training.
 
-3.  Colmap data
-
-For custom data, run `colmap` and get a folder `sparse/0` under which there are `cameras.bin`, `images.bin` and `points3D.bin`. The following data with colmap format are also supported:
-
-  *  [nerf_llff_data](https://drive.google.com/file/d/16VnMcF1KJYxN9QId6TClMsZRahHNMW5g/view?usp=sharing) 
-  *  [mipnerf360 data](http://storage.googleapis.com/gresearch/refraw360/360_v2.zip)
-  *  [HDR-NeRF data](https://drive.google.com/drive/folders/1OTDLLH8ydKX1DcaNpbQ46LlP0dKx6E-I). Additionally, download my colmap pose estimation from [here](https://drive.google.com/file/d/1TXxgf_ZxNB4o67FVD_r0aBUIZVRgZYMX/view?usp=sharing) and extract to the same location.
-
-4. RTMV data
-
-Download data from [here](http://www.cs.umd.edu/~mmeshry/projects/rtmv/). To convert the hdr images into ldr images for training, run `python misc/prepare_rtmv.py <path/to/RTMV>`, it will create `images/` folder under each scene folder, and will use these images to train (and test).
+**Note**: images must carry an embedded ICC profile — image loading converts from that profile to sRGB and fails if it is missing.
 
 # :key: Training
 
-Quickstart: `python train.py --root_dir <path/to/lego> --exp_name Lego`
+Quickstart:
 
-It will train the Lego scene for 30k steps (each step with 8192 rays), and perform one testing at the end. The training process should finish within about 5 minutes (saving testing image is slow, add `--no_save_test` to disable). Testing PSNR will be shown at the end.
+```bash
+python train.py --root_dir <path/to/lego> --exp_name Lego
+```
 
-More options can be found in [opt.py](opt.py).
+It will train the Lego scene for 30k steps (each step with 8192 rays), and perform one testing at the end. Add `--no_save_test` to skip saving test images (which is slow). Note that reported training/testing PSNR is computed in YUV space.
 
-For other public dataset training, please refer to the scripts under `benchmarking`.
+Color transfer training uses the deferred full-image loss, typically starting from a pretrained scene:
+
+```bash
+python train.py --root_dir <path/to/scene> --exp_name <name> \
+    --ray_sampling_strategy deferred_images --weight_path <path/to/pretrained.ckpt>
+```
+
+More options can be found in [opt.py](opt.py). Reference invocations for the public datasets are under `benchmarking/`.
+
+Outputs are written to `ckpts/<dataset_name>/<exp_name>/` (checkpoints, plus a slimmed copy), `logs/<dataset_name>/<exp_name>/` (TensorBoard) and `results/<dataset_name>/<exp_name>/<epoch>/` (validation renders; the deferred mode also dumps `deferred_pred.png`/`deferred_gt.png` there for inspection).
 
 # :mag_right: Testing
 
-Use `test.ipynb` to generate images. Lego pretrained model is available [here](https://github.com/kwea123/ngp_pl/releases/tag/v1.0)
+Use `test.ipynb` to generate images from a checkpoint.
 
-GUI usage: run `python show_gui.py` followed by the **same** hyperparameters used in training (`dataset_name`, `root_dir`, etc) and **add the checkpoint path** with `--ckpt_path <path/to/.ckpt>`
+GUI usage: run `python show_gui.py` followed by the **same** hyperparameters used in training (`dataset_name`, `root_dir`, etc) and **add the checkpoint path** with `--ckpt_path <path/to/.ckpt>`.
 
-# Comparison with torch-ngp and the paper
+# Acknowledgements
 
-I compared the quality (average testing PSNR on `Synthetic-NeRF`) and the inference speed (on `Lego` scene) v.s. the concurrent work torch-ngp (default settings) and the paper, all trained for about 5 minutes:
-
-| Method    | avg PSNR | FPS   | GPU     |
-| :---:     | :---:    | :---: | :---:   |
-| torch-ngp | 31.46    | 18.2  | 2080 Ti |
-| mine      | 32.96    | 36.2  | 2080 Ti |
-| instant-ngp paper | **33.18** | **60** | 3090 |
-
-As for quality, mine is slightly better than torch-ngp, but the result might fluctuate across different runs.
-
-As for speed, mine is faster than torch-ngp, but is still only half fast as instant-ngp. Speed is dependent on the scene (if most of the scene is empty, speed will be faster).
-
-<p align="center">
-  <img src="https://user-images.githubusercontent.com/11364490/176800109-38eb35f3-e145-4a09-8304-1795e3a4e8cd.png", width="45%">
-  <img src="https://user-images.githubusercontent.com/11364490/176800106-fead794f-7e70-4459-b99e-82725fe6777e.png", width="45%">
-  <br>
-  <img src="https://user-images.githubusercontent.com/11364490/180444355-444676cf-2af2-49ad-9fe2-16eb1e6c4ef1.png", width="45%">
-  <img src="https://user-images.githubusercontent.com/11364490/180444337-3df9f245-f7eb-453f-902b-0cb9dae60144.png", width="45%">
-  <br>
-  <sup>Left: torch-ngp. Right: mine.</sup>
-</p>
-
-# :chart: Benchmarks
-
-To run benchmarks, use the scripts under `benchmarking`.
-
-Followings are my results trained using 1 RTX 2080 Ti (qualitative results [here](https://github.com/kwea123/ngp_pl/issues/7)):
-
-<details>
-  <summary>Synthetic-NeRF</summary>
-
-|       | Mic   | Ficus | Chair | Hotdog | Materials | Drums | Ship  | Lego  | AVG   |
-| :---: | :---: | :---: | :---: | :---:  | :---:     | :---: | :---: | :---: | :---: |
-| PSNR  | 35.59 | 34.13 | 35.28 | 37.35  | 29.46     | 25.81 | 30.32 | 35.76 | 32.96 |
-| SSIM  | 0.988 | 0.982 | 0.984 | 0.980  | 0.944     | 0.933 | 0.890 | 0.979 | 0.960 |
-| LPIPS | 0.017 | 0.024 | 0.025 | 0.038  | 0.070     | 0.076 | 0.133 | 0.022 | 0.051 |
-| FPS   | 40.81 | 34.02 | 49.80 | 25.06  | 20.08     | 37.77 | 15.77 | 36.20 | 32.44 |
-| Training time | 3m9s | 3m12s | 4m17s | 5m53s | 4m55s | 4m7s | 9m20s | 5m5s | 5m00s |
-
-</details>
-
-<details>
-  <summary>Synthetic-NSVF</summary>
-
-|       | Wineholder | Steamtrain | Toad | Robot | Bike | Palace | Spaceship | Lifestyle | AVG | 
-| :---: | :---: | :---: | :---: | :---: | :---:  | :---:  | :---: | :---: | :---: |
-| PSNR  | 31.64 | 36.47 | 35.57 | 37.10 | 37.87 | 37.41 | 35.58 | 34.76 | 35.80 |
-| SSIM  | 0.962 | 0.987 | 0.980 | 0.994 | 0.990 | 0.977 | 0.980 | 0.967 | 0.980 |
-| LPIPS | 0.047 | 0.023 | 0.024 | 0.010 | 0.015 | 0.021 | 0.029 | 0.044 | 0.027 |
-| FPS   | 47.07 | 75.17 | 50.42 | 64.87 | 66.88 | 28.62 | 35.55 | 22.84 | 48.93 |
-| Training time | 3m58s | 3m44s | 7m22s | 3m25s | 3m11s | 6m45s | 3m25s | 4m56s | 4m36s |
-
-</details>
-
-<details>
-  <summary>Tanks and Temples</summary>
-
-|      | Ignatius | Truck | Barn  | Caterpillar | Family | AVG   | 
-|:---: | :---:    | :---: | :---: | :---:       | :---:  | :---: |
-| PSNR | 28.30    | 27.67 | 28.00 | 26.16       | 34.27  | 28.78 |
-| *FPS | 10.04    |  7.99 | 16.14 | 10.91       | 6.16   | 10.25 |
-
-*Evaluated on `test-traj`
-
-</details>
-
-<details>
-  <summary>BlendedMVS</summary>
-
-|       | *Jade  | *Fountain | Character | Statues | AVG   | 
-|:---:  | :---:  | :---:     | :---:     | :---:   | :---: |
-| PSNR  | 25.43  | 26.82     | 30.43     | 26.79   | 27.38 |
-| **FPS | 26.02  | 21.24     | 35.99     | 19.22   | 25.61 |
-| Training time | 6m31s | 7m15s | 4m50s | 5m57s | 6m48s |
-
-*I manually switch the background from black to white, so the number isn't directly comparable to that in the papers.
-
-**Evaluated on `test-traj`
-
-</details>
-
-# TODO
-
-- [ ] use super resolution in GUI to improve FPS
-- [ ] multi-sphere images as background
+This repository is a research fork of [kwea123/ngp_pl](https://github.com/kwea123/ngp_pl) (MIT license); the volume rendering CUDA extension (`vren`), training infrastructure and benchmarking scripts come from there. Quality/speed benchmarks of the base implementation are reported in the upstream README and [gallery](GALLERY.md).
